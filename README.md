@@ -113,50 +113,27 @@ threatforge/
 ├── cmd/
 │   └── server/main.go           # API server entrypoint
 ├── internal/
+│   ├── api/gateway/             # API rate limiting
+│   ├── compliance/              # Compliance finding schema
 │   ├── config/config.go         # Configuration management
-│   ├── splunk/
-│   │   ├── hec.go               # HTTP Event Collector client
-│   │   ├── ingest.go            # Ingest from Splunk
-│   │   └── output.go            # Output to Splunk
-│   ├── threatintel/
-│   │   ├── provider.go          # Provider interface
-│   │   ├── misp.go              # MISP integration
-│   │   ├── otx.go               # AlienVault OTX
-│   │   ├── virustotal.go        # VirusTotal
-│   │   ├── greynoise.go         # GreyNoise
-│   │   ├── abuseipdb.go         # AbuseIPDB
-│   │   └── cache.go             # Redis IOC cache
-│   ├── detection/
-│   │   ├── sigma.go             # Sigma rule evaluator
-│   │   ├── custom.go            # Custom rule engine
-│   │   └── loader.go            # Rule loader from Git
-│   ├── enrichment/
-│   │   ├── enricher.go          # Alert enrichment pipeline
-│   │   └── scorer.go            # Risk scoring
-│   ├── ml/
-│   │   ├── baseline.go          # Behavioral baselines
-│   │   └── anomaly.go           # Anomaly detection
-│   ├── handlers/
-│   │   ├── ingest.go            # Ingest API handlers
-│   │   ├── rules.go             # Rule management API
-│   │   └── health.go            # Health checks
-│   └── models/
-│       ├── alert.go             # Alert model
-│       ├── detection.go         # Detection model
-│       └── indicator.go         # IOC model
+│   ├── enrichment/              # Alert enrichment pipeline
+│   ├── ingestion/               # Splunk HEC integration
+│   ├── mitre/                   # MITRE ATT&CK framework mapping
+│   ├── observability/           # Logging, metrics, tracing
+│   ├── playbooks/               # IR playbook management
+│   └── threatintel/             # Threat intel providers
 ├── rules/
 │   ├── sigma/                   # Sigma rules (git submodule)
 │   └── custom/                  # Organization-specific rules
 ├── configs/
 │   └── config.yaml              # Configuration template
 ├── docs/
-│   ├── HLD.md                   # High-Level Design
+│   ├── architecture/            # HLD, diagrams
 │   ├── adr/                     # Architecture Decision Records
-│   └── diagrams/                # Architecture diagrams
+│   ├── runbooks/                # Technical runbooks
+│   └── DR-BC.md                 # Disaster Recovery & Business Continuity
 ├── k8s/
 │   └── deployment.yaml          # Kubernetes manifests
-├── scripts/
-│   └── sigma-update.sh          # Sigma rule sync script
 ├── Dockerfile
 ├── docker-compose.yml
 ├── go.mod
@@ -366,6 +343,22 @@ curl -X POST http://localhost:8080/api/v1/ingest \
 - [ ] Kafka streaming mode
 - [ ] Multi-tenant support
 
+## Observability
+
+- **Logging**: Structured JSON logging with zap
+- **Metrics**: Prometheus metrics at `/metrics`
+  - IOC ingestion/enrichment rates
+  - Playbook execution metrics
+  - MITRE technique coverage
+- **Tracing**: OpenTelemetry distributed tracing
+- **Health**: Kubernetes-ready probes at `/health`, `/ready`, `/live`
+
+## Documentation
+
+- [ADR-001: Threat Intel Architecture](docs/adr/ADR-001-threat-intel-architecture.md)
+- [Technical Runbooks](docs/runbooks/README.md)
+- [DR/BC Plan](docs/DR-BC.md)
+
 ## License
 
 Apache 2.0 License - See [LICENSE](LICENSE)
@@ -373,4 +366,4 @@ Apache 2.0 License - See [LICENSE](LICENSE)
 ---
 
 **Author:** Liem Vo-Nguyen  
-**LinkedIn:** linkedin.com/in/liemvonguyen
+**LinkedIn:** [linkedin.com/in/liemvonguyen](https://linkedin.com/in/liemvonguyen)

@@ -1,0 +1,80 @@
+# ThreatForge Configuration
+
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 10s
+
+redis:
+  addr: localhost:6379
+  password_env: REDIS_PASSWORD
+  db: 0
+  pool_size: 10
+  cache_ttl: 1h
+
+splunk:
+  receiver:
+    enabled: true
+    port: 8088
+    token_env: SPLUNK_HEC_TOKEN_INBOUND
+    max_batch_size: 1000
+    max_event_size: 1048576
+    read_timeout: 30s
+    write_timeout: 30s
+  sender:
+    enabled: true
+    hec_url: https://splunk.example.com:8088
+    token_env: SPLUNK_HEC_TOKEN_OUTBOUND
+    index: threatforge_enriched
+    sourcetype: threatforge:alert
+    source: threatforge
+    batch_size: 100
+    batch_timeout: 5s
+    timeout: 30s
+    retry_count: 3
+    verify_ssl: true
+
+threat_intel:
+  misp:
+    enabled: false
+    base_url: https://misp.example.com
+    api_key_env: MISP_API_KEY
+    verify_ssl: true
+    timeout: 30s
+    rate_limit: 60
+    published_only: true
+
+  otx:
+    enabled: false
+    api_key_env: OTX_API_KEY
+    timeout: 30s
+    rate_limit: 60
+
+  virustotal:
+    enabled: false
+    api_key_env: VIRUSTOTAL_API_KEY
+    timeout: 30s
+    rate_limit: 4  # Free tier limit
+
+  greynoise:
+    enabled: false
+    api_key_env: GREYNOISE_API_KEY
+    timeout: 30s
+    rate_limit: 60
+
+  abuseipdb:
+    enabled: false
+    api_key_env: ABUSEIPDB_API_KEY
+    timeout: 30s
+    rate_limit: 60
+
+detection:
+  sigma_rules_path: rules/sigma
+  custom_rules_path: rules/custom
+  reload_interval: 5m
+
+logging:
+  level: info
+  format: json
+

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/lvonguyen/threatforge/internal/repository"
 )
 
 // Version information (injected at build time via ldflags)
@@ -23,6 +25,9 @@ var (
 	GitCommit = "unknown"
 	BuildTime = "unknown"
 )
+
+// Global repository manager
+var repoManager *repository.Manager
 
 func main() {
 	// Parse command-line flags
@@ -44,6 +49,15 @@ func main() {
 
 	// TODO: Load configuration
 	// cfg, err := config.Load(*configPath)
+
+	// Initialize repository manager
+	var err error
+	repoManager, err = repository.NewManager("repositories")
+	if err != nil {
+		logger.Printf("Warning: Repository manager initialization failed: %v", err)
+	} else {
+		logger.Printf("Repository manager initialized")
+	}
 
 	// Setup context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -83,6 +97,15 @@ func main() {
 
 		// Stats endpoints
 		r.Get("/stats", handleStats)
+
+		// Repository endpoints
+		r.Route("/repos", func(r chi.Router) {
+			r.Get("/", handleListRepos)
+			r.Post("/clone", handleCloneRepo)
+			r.Get("/{name}", handleGetRepoStatus)
+			r.Post("/{name}/sync", handleSyncRepo)
+			r.Delete("/{name}", handleDeleteRepo)
+		})
 	})
 
 	// HEC-compatible endpoints (for Splunk integration)
@@ -220,5 +243,148 @@ func handleHECHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"text":"HEC is healthy","code":17}`))
+}
+
+// Repository handlers
+
+// CloneRequest represents a request to clone a repository.
+type CloneRequest struct {
+	Name       string `json:"name"`
+	RemoteURL  string `json:"remote_url"`
+	Branch     string `json:"branch,omitempty"`
+	Depth      int    `json:"depth,omitempty"`
+	SSHKeyPath string `json:"ssh_key_path,omitempty"`
+}
+
+func handleListRepos(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if repoManager == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository manager not initialized"})
+		return
+	}
+
+	repos := repoManager.List()
+	response := map[string]interface{}{
+		"repositories": repos,
+		"count":        len(repos),
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleCloneRepo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if repoManager == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository manager not initialized"})
+		return
+	}
+
+	var req CloneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.Name == "" || req.RemoteURL == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "name and remote_url are required"})
+		return
+	}
+
+	repo := &repository.Repository{
+		Name:       req.Name,
+		RemoteURL:  req.RemoteURL,
+		Branch:     req.Branch,
+		Depth:      req.Depth,
+		SSHKeyPath: req.SSHKeyPath,
+	}
+
+	result, err := repoManager.Clone(r.Context(), repo)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  err.Error(),
+			"result": result,
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleGetRepoStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if repoManager == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository manager not initialized"})
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	status, err := repoManager.Status(r.Context(), name)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(status)
+}
+
+func handleSyncRepo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if repoManager == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository manager not initialized"})
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	result, err := repoManager.Pull(r.Context(), name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  err.Error(),
+			"result": result,
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if repoManager == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository manager not initialized"})
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+
+	// Check for deleteFiles query param
+	deleteFiles := r.URL.Query().Get("delete_files") == "true"
+
+	if err := repoManager.Remove(name, deleteFiles); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
 }
 

@@ -11,12 +11,13 @@ import (
 
 // Config holds all ThreatForge configuration.
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	Redis       RedisConfig       `yaml:"redis"`
-	Splunk      SplunkConfig      `yaml:"splunk"`
-	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
-	Detection   DetectionConfig   `yaml:"detection"`
-	Logging     LoggingConfig     `yaml:"logging"`
+	Server       ServerConfig       `yaml:"server"`
+	Redis        RedisConfig        `yaml:"redis"`
+	Splunk       SplunkConfig       `yaml:"splunk"`
+	ThreatIntel  ThreatIntelConfig  `yaml:"threat_intel"`
+	Detection    DetectionConfig    `yaml:"detection"`
+	Logging      LoggingConfig      `yaml:"logging"`
+	Repositories RepositoriesConfig `yaml:"repositories"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -131,8 +132,44 @@ type DetectionConfig struct {
 
 // LoggingConfig holds logging settings.
 type LoggingConfig struct {
-	Level  string `yaml:"level"` // debug, info, warn, error
+	Level  string `yaml:"level"`  // debug, info, warn, error
 	Format string `yaml:"format"` // json, console
+}
+
+// RepositoriesConfig holds repository management settings.
+type RepositoriesConfig struct {
+	// BasePath is the base directory for cloned repositories.
+	BasePath string `yaml:"base_path"`
+
+	// Repos is a list of repositories to manage.
+	Repos []RepositoryConfig `yaml:"repos"`
+}
+
+// RepositoryConfig holds settings for a single repository.
+type RepositoryConfig struct {
+	// Name is a unique identifier for this repository.
+	Name string `yaml:"name"`
+
+	// RemoteURL is the git remote URL (HTTPS or SSH).
+	RemoteURL string `yaml:"remote_url"`
+
+	// LocalPath overrides the default local path (base_path/name).
+	LocalPath string `yaml:"local_path"`
+
+	// Branch to checkout (default: main).
+	Branch string `yaml:"branch"`
+
+	// Depth for shallow clone (0 = full clone).
+	Depth int `yaml:"depth"`
+
+	// AutoSync enables automatic periodic syncing.
+	AutoSync bool `yaml:"auto_sync"`
+
+	// SyncInterval is how often to sync if AutoSync is enabled.
+	SyncInterval time.Duration `yaml:"sync_interval"`
+
+	// SSHKeyPath is the path to SSH private key (for SSH URLs).
+	SSHKeyPath string `yaml:"ssh_key_path"`
 }
 
 // Load reads configuration from a YAML file.
@@ -230,6 +267,10 @@ func DefaultConfig() *Config {
 		Logging: LoggingConfig{
 			Level:  "info",
 			Format: "json",
+		},
+		Repositories: RepositoriesConfig{
+			BasePath: "repositories",
+			Repos:    []RepositoryConfig{},
 		},
 	}
 }

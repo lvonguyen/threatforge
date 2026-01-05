@@ -1,0 +1,16 @@
+# Ignore OS files
+.DS_Store
+*.swp
+
+# Binary
+/threatforge
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Local config
+configs/config.local.yaml
+.env
+

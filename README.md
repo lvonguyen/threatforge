@@ -261,61 +261,6 @@ curl -X POST http://localhost:8080/api/v1/ingest \
 | sendalert threatforge param.endpoint="http://threatforge:8080/api/v1/ingest"
 ```
 
-## Interview STAR Stories
-
-### Story 1: Detection Engineering at Scale
-
-**Situation:** SOC team managing 500+ Splunk correlation rules ad-hoc, no version control, inconsistent testing, frequent false positive storms.
-
-**Task:** Implement Detection-as-Code workflow enabling Git-managed rules with CI/CD testing before production deployment.
-
-**Action:**
-- Adopted Sigma as standard detection format (vendor-agnostic)
-- Built ThreatForge rule loader syncing from Git repository
-- Created CI pipeline validating rule syntax, testing against sample logs
-- Implemented gradual rollout: shadow mode → audit mode → enforcement
-
-**Result:**
-- Detection rules reduced from 500+ to 180 high-fidelity rules
-- False positive rate dropped from 95% to 23%
-- Mean time to deploy new detection: 4 weeks → 2 hours
-- All rules mapped to MITRE ATT&CK with coverage dashboard
-
-### Story 2: Threat Intel Operationalization
-
-**Situation:** Organization subscribing to 5 threat intel feeds, data sitting unused in spreadsheets, no automated correlation with security events.
-
-**Task:** Build automated IOC correlation enriching alerts in real-time without replacing Splunk.
-
-**Action:**
-- Deployed MISP as central threat intel platform aggregating all feeds
-- Built ThreatForge with multi-provider integration (MISP, OTX, VirusTotal)
-- Implemented Redis cache for sub-millisecond IOC lookups
-- Created enrichment pipeline adding context to Splunk alerts via HEC
-
-**Result:**
-- 12,000 IOCs operationalized from previously unused feeds
-- Alert enrichment latency: <50ms p99
-- True positive rate improved 340% for network-based detections
-- Automated blocking of confirmed malicious IPs via SOAR integration
-
-### Story 3: ML-Enhanced Anomaly Detection
-
-**Situation:** Traditional threshold-based alerting missing sophisticated attacks, SOC wanted behavioral detection without ML expertise.
-
-**Task:** Implement ML anomaly detection complementing rule-based detections.
-
-**Action:**
-- Built behavioral baseline engine profiling normal patterns per entity
-- Implemented statistical anomaly detection (isolation forest, z-score)
-- Created entity risk scoring combining multiple signals
-- Integrated anomaly alerts into existing Splunk workflow
-
-**Result:**
-- Detected 3 insider threat cases missed by rule-based detection
-- Reduced alert volume 60% by suppressing known-good anomalies
-- Built foundation for UEBA without expensive commercial product
-
 ## Roadmap
 
 ### Phase 1: Core Pipeline (Current)

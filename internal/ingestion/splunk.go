@@ -149,15 +149,15 @@ func (r *HECReceiver) checkRateLimit() bool {
 
 // handleEvent processes HEC event endpoint requests.
 func (r *HECReceiver) handleEvent(w http.ResponseWriter, req *http.Request) {
-	// Check rate limit
-	if r.checkRateLimit() {
-		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
+	// Validate token first (before rate limit to prevent unauthenticated DoS)
+	if !r.validateToken(req) {
+		http.Error(w, `{"text":"Invalid token","code":4}`, http.StatusForbidden)
 		return
 	}
 
-	// Validate token
-	if !r.validateToken(req) {
-		http.Error(w, `{"text":"Invalid token","code":4}`, http.StatusForbidden)
+	// Check rate limit (only for authenticated requests)
+	if r.checkRateLimit() {
+		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
 		return
 	}
 
@@ -201,15 +201,15 @@ func (r *HECReceiver) handleEvent(w http.ResponseWriter, req *http.Request) {
 
 // handleRaw processes raw HEC endpoint requests.
 func (r *HECReceiver) handleRaw(w http.ResponseWriter, req *http.Request) {
-	// Check rate limit
-	if r.checkRateLimit() {
-		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
+	// Validate token first (before rate limit to prevent unauthenticated DoS)
+	if !r.validateToken(req) {
+		http.Error(w, `{"text":"Invalid token","code":4}`, http.StatusForbidden)
 		return
 	}
 
-	// Validate token
-	if !r.validateToken(req) {
-		http.Error(w, `{"text":"Invalid token","code":4}`, http.StatusForbidden)
+	// Check rate limit (only for authenticated requests)
+	if r.checkRateLimit() {
+		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
 		return
 	}
 

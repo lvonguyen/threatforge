@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lvonguyen/threatforge/internal/enrichment"
+	"golang.org/x/time/rate"
 )
 
 // HECReceiver receives events via Splunk HEC protocol.
@@ -22,6 +23,7 @@ type HECReceiver struct {
 	config   ReceiverConfig
 	handler  EventHandler
 	server   *http.Server
+	limiter  *rate.Limiter
 	mu       sync.RWMutex
 	stats    ReceiverStats
 }
@@ -37,6 +39,8 @@ type ReceiverConfig struct {
 	AckEnabled      bool          `yaml:"ack_enabled"`
 	ReadTimeout     time.Duration `yaml:"read_timeout"`
 	WriteTimeout    time.Duration `yaml:"write_timeout"`
+	RateLimit       float64       `yaml:"rate_limit"`  // Requests per second (0 = disabled)
+	RateBurst       int           `yaml:"rate_burst"`  // Max burst size
 }
 
 // DefaultReceiverConfig returns sensible defaults.
@@ -49,6 +53,8 @@ func DefaultReceiverConfig() ReceiverConfig {
 		AckEnabled:   false,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
+		RateLimit:    100, // 100 requests per second
+		RateBurst:    200, // Allow burst of 200 requests
 	}
 }
 
@@ -57,6 +63,7 @@ type ReceiverStats struct {
 	EventsReceived int64
 	EventsDropped  int64
 	BytesReceived  int64
+	RateLimited    int64 // Requests rejected due to rate limiting
 	LastEventAt    time.Time
 }
 
@@ -76,9 +83,15 @@ type HECEvent struct {
 
 // NewHECReceiver creates a new HEC receiver.
 func NewHECReceiver(config ReceiverConfig, handler EventHandler) *HECReceiver {
+	var limiter *rate.Limiter
+	if config.RateLimit > 0 {
+		limiter = rate.NewLimiter(rate.Limit(config.RateLimit), config.RateBurst)
+	}
+
 	return &HECReceiver{
 		config:  config,
 		handler: handler,
+		limiter: limiter,
 	}
 }
 
@@ -120,8 +133,28 @@ func (r *HECReceiver) Stats() ReceiverStats {
 	return r.stats
 }
 
+// checkRateLimit returns true if the request should be rejected due to rate limiting.
+func (r *HECReceiver) checkRateLimit() bool {
+	if r.limiter == nil {
+		return false // Rate limiting disabled
+	}
+	if !r.limiter.Allow() {
+		r.mu.Lock()
+		r.stats.RateLimited++
+		r.mu.Unlock()
+		return true
+	}
+	return false
+}
+
 // handleEvent processes HEC event endpoint requests.
 func (r *HECReceiver) handleEvent(w http.ResponseWriter, req *http.Request) {
+	// Check rate limit
+	if r.checkRateLimit() {
+		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
+		return
+	}
+
 	// Validate token
 	if !r.validateToken(req) {
 		http.Error(w, `{"text":"Invalid token","code":4}`, http.StatusForbidden)
@@ -168,7 +201,13 @@ func (r *HECReceiver) handleEvent(w http.ResponseWriter, req *http.Request) {
 
 // handleRaw processes raw HEC endpoint requests.
 func (r *HECReceiver) handleRaw(w http.ResponseWriter, req *http.Request) {
-	// Similar to handleEvent but for raw data
+	// Check rate limit
+	if r.checkRateLimit() {
+		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
+		return
+	}
+
+	// Validate token
 	if !r.validateToken(req) {
 		http.Error(w, `{"text":"Invalid token","code":4}`, http.StatusForbidden)
 		return

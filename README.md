@@ -1,4 +1,4 @@
-# <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/rapid7-dark.svg" width="32" height="32" alt="ThreatForge"> ThreatForge
+# <img src="../../../reference/templates/icons/homelab-svg-assets/assets/rapid7-dark.svg" width="32" height="32" alt="ThreatForge"> ThreatForge
 
 **Detection Engineering Pipeline with Threat Intelligence Correlation**
 
@@ -285,7 +285,7 @@ tags:
 - Daily/hourly threat hunting
 - Best for: Retrospective analysis
 
-### <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/prometheus.svg" width="24" height="24" alt="Telemetry"> Telemetry Hub (Merged)
+### <img src="../../../reference/templates/icons/homelab-svg-assets/assets/prometheus.svg" width="24" height="24" alt="Telemetry"> Telemetry Hub (Merged)
 
 Multi-source security telemetry aggregation and normalization:
 
@@ -300,7 +300,7 @@ Multi-source security telemetry aggregation and normalization:
 - **Identity Enrichment**: Context from Entra ID/Okta
 - **Asset Enrichment**: CMDB integration for business context
 
-### <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/vault.svg" width="24" height="24" alt="Security"> Auto-Remediation Agents (Merged)
+### <img src="../../../reference/templates/icons/homelab-svg-assets/assets/vault.svg" width="24" height="24" alt="Security"> Auto-Remediation Agents (Merged)
 
 Automated response to security findings:
 
@@ -401,7 +401,7 @@ curl -X POST http://localhost:8080/api/v1/ingest \
 - [ ] Kafka streaming mode
 - [ ] Multi-tenant support
 
-## <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/grafana.svg" width="32" height="32" alt="Observability"> Observability
+## <img src="../../../reference/templates/icons/homelab-svg-assets/assets/grafana.svg" width="32" height="32" alt="Observability"> Observability
 
 - **Logging**: Structured JSON logging with zap
 - **Metrics**: Prometheus metrics at `/metrics`

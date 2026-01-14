@@ -24,6 +24,7 @@ type HECReceiver struct {
 	handler  EventHandler
 	server   *http.Server
 	limiter  *rate.Limiter
+	token    string // Cached token from environment
 	mu       sync.RWMutex
 	stats    ReceiverStats
 }
@@ -92,6 +93,7 @@ func NewHECReceiver(config ReceiverConfig, handler EventHandler) *HECReceiver {
 		config:  config,
 		handler: handler,
 		limiter: limiter,
+		token:   os.Getenv(config.TokenEnv), // Cache token at initialization
 	}
 }
 
@@ -262,8 +264,7 @@ func (r *HECReceiver) handleHealth(w http.ResponseWriter, req *http.Request) {
 
 // validateToken checks the HEC token.
 func (r *HECReceiver) validateToken(req *http.Request) bool {
-	expectedToken := os.Getenv(r.config.TokenEnv)
-	if expectedToken == "" {
+	if r.token == "" {
 		return false // Fail closed: reject requests when token not configured
 	}
 
@@ -273,7 +274,7 @@ func (r *HECReceiver) validateToken(req *http.Request) bool {
 		return false
 	}
 
-	return strings.TrimPrefix(auth, "Splunk ") == expectedToken
+	return strings.TrimPrefix(auth, "Splunk ") == r.token
 }
 
 // parseEvents parses HEC event body (JSON or newline-delimited).
@@ -316,6 +317,7 @@ func (r *HECReceiver) parseEvents(body []byte) ([]HECEvent, error) {
 type HECSender struct {
 	config     SenderConfig
 	httpClient *http.Client
+	token      string // Cached token from environment
 	mu         sync.RWMutex
 	stats      SenderStats
 }
@@ -369,6 +371,7 @@ func NewHECSender(config SenderConfig) (*HECSender, error) {
 
 	return &HECSender{
 		config: config,
+		token:  token, // Cache token at initialization
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
@@ -466,8 +469,7 @@ func (s *HECSender) send(ctx context.Context, data []byte, eventCount int) error
 		return err
 	}
 
-	token := os.Getenv(s.config.TokenEnv)
-	req.Header.Set("Authorization", "Splunk "+token)
+	req.Header.Set("Authorization", "Splunk "+s.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)

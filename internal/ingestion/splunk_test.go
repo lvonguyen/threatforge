@@ -611,4 +611,10 @@ func TestRateLimiting_ResponseFormat(t *testing.T) {
 	if response["text"] != "Rate limit exceeded" {
 		t.Errorf("expected rate limit message, got %v", response["text"])
 	}
+
+	// Verify Retry-After header (RFC 6585)
+	retryAfter := rr.Header().Get("Retry-After")
+	if retryAfter != "1" {
+		t.Errorf("expected Retry-After header = 1, got %q", retryAfter)
+	}
 }

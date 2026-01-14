@@ -157,6 +157,7 @@ func (r *HECReceiver) handleEvent(w http.ResponseWriter, req *http.Request) {
 
 	// Check rate limit (only for authenticated requests)
 	if r.checkRateLimit() {
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
 		return
 	}
@@ -209,6 +210,7 @@ func (r *HECReceiver) handleRaw(w http.ResponseWriter, req *http.Request) {
 
 	// Check rate limit (only for authenticated requests)
 	if r.checkRateLimit() {
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, `{"text":"Rate limit exceeded","code":9}`, http.StatusTooManyRequests)
 		return
 	}

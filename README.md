@@ -287,7 +287,9 @@ tags:
 - Daily/hourly threat hunting
 - Best for: Retrospective analysis
 
-### <img src="../../../reference/templates/icons/homelab-svg-assets/assets/prometheus.svg" width="24" height="24" alt="Telemetry"> Telemetry Hub (Merged)
+<img src="../../../reference/templates/icons/homelab-svg-assets/assets/prometheus.svg" width="24" height="24" alt="Telemetry">
+
+### Telemetry Hub (Merged)
 
 Multi-source security telemetry aggregation and normalization:
 

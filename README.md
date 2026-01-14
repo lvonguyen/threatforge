@@ -1,4 +1,6 @@
-# <img src="../../../reference/templates/icons/homelab-svg-assets/assets/rapid7-dark.svg" width="32" height="32" alt="ThreatForge"> ThreatForge
+<img src="../../../reference/templates/icons/homelab-svg-assets/assets/rapid7-dark.svg" width="32" height="32" alt="ThreatForge" align="left" style="margin-right: 10px;">
+
+# ThreatForge
 
 **Detection Engineering Pipeline with Threat Intelligence Correlation**
 
@@ -24,42 +26,42 @@ ThreatForge addresses these with:
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'fontFamily': 'Georgia'}}}%%
 flowchart TB
-    subgraph INPUT["INPUT SOURCES"]
+    subgraph INPUT["📥 INPUT SOURCES"]
         style INPUT fill:#3b82f6,stroke:#1e40af,color:#fff
-        HEC[Splunk HEC<br/>Webhook]
-        KAFKA[Kafka<br/>Consumer]
-        SYSLOG[Syslog<br/>RFC 5424]
-        PUBSUB[Cloud<br/>Pub/Sub]
+        HEC["⚡ Splunk HEC<br/>Webhook"]
+        KAFKA["📊 Kafka<br/>Consumer"]
+        SYSLOG["🖥️ Syslog<br/>RFC 5424"]
+        PUBSUB["☁️ Cloud<br/>Pub/Sub"]
     end
 
-    subgraph DETECTION["DETECTION ENGINE"]
+    subgraph DETECTION["🛡️ DETECTION ENGINE"]
         style DETECTION fill:#1e40af,stroke:#0f172a,color:#fff
-        SIGMA[Sigma Rule<br/>Evaluator<br/>1000+ rules]
-        CUSTOM[Custom Rule<br/>Engine<br/>YARA-L style]
-        ML[ML Anomaly<br/>Detector<br/>Behavioral baselines]
+        SIGMA["📜 Sigma Rule<br/>Evaluator<br/>1000+ rules"]
+        CUSTOM["⚙️ Custom Rule<br/>Engine<br/>YARA-L style"]
+        ML["🧠 ML Anomaly<br/>Detector<br/>Behavioral baselines"]
     end
 
-    subgraph THREATINTEL["THREAT INTEL CORRELATION"]
+    subgraph THREATINTEL["🎯 THREAT INTEL CORRELATION"]
         style THREATINTEL fill:#f59e0b,stroke:#b45309,color:#fff
-        MISP[MISP]
-        OTX[OTX<br/>AlienVault]
-        VT[VirusTotal]
-        GN[GreyNoise]
-        ABUSE[AbuseIPDB]
-        CACHE[(IOC Cache<br/>Redis)]
+        MISP["🐛 MISP"]
+        OTX["📡 OTX<br/>AlienVault"]
+        VT["🦠 VirusTotal"]
+        GN["🔇 GreyNoise"]
+        ABUSE["🚫 AbuseIPDB"]
+        CACHE[("💾 IOC Cache<br/>Redis")]
     end
 
-    subgraph ENRICHMENT["ENRICHMENT & SCORING"]
+    subgraph ENRICHMENT["📊 ENRICHMENT and SCORING"]
         style ENRICHMENT fill:#22c55e,stroke:#15803d,color:#fff
-        ENRICH[Alert + Detection Match<br/>+ Threat Intel Context<br/>+ Risk Score]
+        ENRICH["➕ Alert + Detection Match<br/>+ Threat Intel Context<br/>+ Risk Score"]
     end
 
-    subgraph OUTPUT["OUTPUT DESTINATIONS"]
+    subgraph OUTPUT["📤 OUTPUT DESTINATIONS"]
         style OUTPUT fill:#ef4444,stroke:#b91c1c,color:#fff
-        SPLUNK_OUT[Splunk HEC<br/>enriched]
-        SOAR[SOAR<br/>Phantom/XSOAR]
-        SNOW[ServiceNow<br/>SecOps]
-        NOTIFY[Slack/Teams<br/>PagerDuty]
+        SPLUNK_OUT["⚡ Splunk HEC<br/>enriched"]
+        SOAR["🤖 SOAR<br/>Phantom/XSOAR"]
+        SNOW["❄️ ServiceNow<br/>SecOps"]
+        NOTIFY["🔔 Slack/Teams<br/>PagerDuty"]
     end
 
     HEC --> SIGMA

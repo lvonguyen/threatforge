@@ -121,7 +121,15 @@ threatforge/
 │   ├── mitre/                   # MITRE ATT&CK framework mapping
 │   ├── observability/           # Logging, metrics, tracing
 │   ├── playbooks/               # IR playbook management
-│   └── threatintel/             # Threat intel providers
+│   ├── threatintel/             # Threat intel providers
+│   ├── telemetry/               # Telemetry Hub (merged)
+│   │   ├── ingestion/           # EDR/SIEM collectors (CrowdStrike, SentinelOne, Defender)
+│   │   ├── normalization/       # OCSF/ECS schema normalization
+│   │   └── correlation/         # Event correlation engine
+│   └── remediation/             # Auto-Remediation Agents (merged)
+│       ├── agents/              # Cloud-specific remediation agents
+│       ├── actions/             # Remediation action library
+│       └── workflows/           # Remediation workflows
 ├── rules/
 │   ├── sigma/                   # Sigma rules (git submodule)
 │   └── custom/                  # Organization-specific rules
@@ -200,7 +208,35 @@ tags:
 - Daily/hourly threat hunting
 - Best for: Retrospective analysis
 
-## Tech Stack
+### Telemetry Hub (Merged)
+
+Multi-source security telemetry aggregation and normalization:
+
+| Source Type | Integrations | Schema |
+|-------------|--------------|--------|
+| **EDR** | CrowdStrike Falcon, SentinelOne, Microsoft Defender | OCSF |
+| **SIEM** | Splunk, Microsoft Sentinel, Elasticsearch | ECS |
+| **Cloud** | AWS CloudTrail, Azure Activity Logs, GCP Audit Logs | OCSF |
+
+- **AI-Powered Analysis**: Claude-based contextual risk scoring
+- **Attack Chain Correlation**: Identifies related events across sources
+- **Identity Enrichment**: Context from Entra ID/Okta
+- **Asset Enrichment**: CMDB integration for business context
+
+### Auto-Remediation Agents (Merged)
+
+Automated response to security findings:
+
+- **Cloud Remediation**: AWS (Lambda), Azure (Functions), GCP (Cloud Functions)
+- **Action Library**: Pre-built actions for common remediations
+  - Isolate compromised instance
+  - Revoke IAM credentials
+  - Block malicious IP
+  - Quarantine suspicious file
+- **Approval Workflows**: Human-in-the-loop for critical actions
+- **Rollback Support**: Undo remediation if false positive
+
+
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|

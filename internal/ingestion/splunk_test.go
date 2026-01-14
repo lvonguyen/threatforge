@@ -374,3 +374,241 @@ func TestReceiverStats_Concurrent(t *testing.T) {
 		t.Errorf("expected EventsReceived=100, got %d", stats.EventsReceived)
 	}
 }
+
+// =============================================================================
+// Rate Limiting Tests
+// =============================================================================
+
+// TestRateLimiting_RejectsExcessRequests verifies that requests exceeding the
+// rate limit are rejected with 429 Too Many Requests.
+func TestRateLimiting_RejectsExcessRequests(t *testing.T) {
+	const testToken = "test-token"
+	os.Setenv("TEST_HEC_TOKEN", testToken)
+	defer os.Unsetenv("TEST_HEC_TOKEN")
+
+	config := ReceiverConfig{
+		TokenEnv:     "TEST_HEC_TOKEN",
+		MaxEventSize: 1024 * 1024,
+		MaxBatchSize: 1000,
+		RateLimit:    1,  // 1 request per second
+		RateBurst:    1,  // No burst allowed
+	}
+	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {
+		return nil
+	})
+
+	// First request should succeed
+	body := []byte(`{"event":"test"}`)
+	req1 := httptest.NewRequest(http.MethodPost, "/services/collector/event", bytes.NewReader(body))
+	req1.Header.Set("Authorization", "Splunk "+testToken)
+	rr1 := httptest.NewRecorder()
+	receiver.handleEvent(rr1, req1)
+
+	if rr1.Code != http.StatusOK {
+		t.Errorf("first request should succeed, got status %d", rr1.Code)
+	}
+
+	// Second request immediately after should be rate limited
+	req2 := httptest.NewRequest(http.MethodPost, "/services/collector/event", bytes.NewReader(body))
+	req2.Header.Set("Authorization", "Splunk "+testToken)
+	rr2 := httptest.NewRecorder()
+	receiver.handleEvent(rr2, req2)
+
+	if rr2.Code != http.StatusTooManyRequests {
+		t.Errorf("second request should be rate limited, got status %d", rr2.Code)
+	}
+
+	// Verify stats
+	stats := receiver.Stats()
+	if stats.RateLimited != 1 {
+		t.Errorf("expected RateLimited=1, got %d", stats.RateLimited)
+	}
+}
+
+// TestRateLimiting_BurstAllowed verifies that burst requests within the burst
+// limit are allowed.
+func TestRateLimiting_BurstAllowed(t *testing.T) {
+	const testToken = "test-token"
+	os.Setenv("TEST_HEC_TOKEN", testToken)
+	defer os.Unsetenv("TEST_HEC_TOKEN")
+
+	config := ReceiverConfig{
+		TokenEnv:     "TEST_HEC_TOKEN",
+		MaxEventSize: 1024 * 1024,
+		MaxBatchSize: 1000,
+		RateLimit:    1,   // 1 request per second sustained
+		RateBurst:    10,  // Allow burst of 10
+	}
+	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {
+		return nil
+	})
+
+	body := []byte(`{"event":"test"}`)
+	successCount := 0
+
+	// Send 10 requests rapidly (should all succeed due to burst)
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/services/collector/event", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Splunk "+testToken)
+		rr := httptest.NewRecorder()
+		receiver.handleEvent(rr, req)
+
+		if rr.Code == http.StatusOK {
+			successCount++
+		}
+	}
+
+	if successCount != 10 {
+		t.Errorf("expected 10 requests to succeed with burst=10, got %d", successCount)
+	}
+
+	// 11th request should be rate limited
+	req := httptest.NewRequest(http.MethodPost, "/services/collector/event", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Splunk "+testToken)
+	rr := httptest.NewRecorder()
+	receiver.handleEvent(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("11th request should be rate limited, got status %d", rr.Code)
+	}
+}
+
+// TestRateLimiting_DisabledWhenZero verifies that rate limiting is disabled
+// when RateLimit is set to 0.
+func TestRateLimiting_DisabledWhenZero(t *testing.T) {
+	const testToken = "test-token"
+	os.Setenv("TEST_HEC_TOKEN", testToken)
+	defer os.Unsetenv("TEST_HEC_TOKEN")
+
+	config := ReceiverConfig{
+		TokenEnv:     "TEST_HEC_TOKEN",
+		MaxEventSize: 1024 * 1024,
+		MaxBatchSize: 1000,
+		RateLimit:    0,  // Disabled
+		RateBurst:    0,
+	}
+	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {
+		return nil
+	})
+
+	body := []byte(`{"event":"test"}`)
+
+	// Send 100 requests rapidly - all should succeed
+	for i := 0; i < 100; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/services/collector/event", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Splunk "+testToken)
+		rr := httptest.NewRecorder()
+		receiver.handleEvent(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("request %d should succeed when rate limiting disabled, got %d", i, rr.Code)
+		}
+	}
+
+	stats := receiver.Stats()
+	if stats.RateLimited != 0 {
+		t.Errorf("expected RateLimited=0 when disabled, got %d", stats.RateLimited)
+	}
+}
+
+// TestRateLimiting_RawEndpoint verifies that rate limiting also applies to
+// the raw endpoint.
+func TestRateLimiting_RawEndpoint(t *testing.T) {
+	const testToken = "test-token"
+	os.Setenv("TEST_HEC_TOKEN", testToken)
+	defer os.Unsetenv("TEST_HEC_TOKEN")
+
+	config := ReceiverConfig{
+		TokenEnv:     "TEST_HEC_TOKEN",
+		MaxEventSize: 1024 * 1024,
+		MaxBatchSize: 1000,
+		RateLimit:    1,
+		RateBurst:    1,
+	}
+	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {
+		return nil
+	})
+
+	body := []byte(`raw event data`)
+
+	// First request succeeds
+	req1 := httptest.NewRequest(http.MethodPost, "/services/collector/raw", bytes.NewReader(body))
+	req1.Header.Set("Authorization", "Splunk "+testToken)
+	rr1 := httptest.NewRecorder()
+	receiver.handleRaw(rr1, req1)
+
+	if rr1.Code != http.StatusOK {
+		t.Errorf("first raw request should succeed, got %d", rr1.Code)
+	}
+
+	// Second request rate limited
+	req2 := httptest.NewRequest(http.MethodPost, "/services/collector/raw", bytes.NewReader(body))
+	req2.Header.Set("Authorization", "Splunk "+testToken)
+	rr2 := httptest.NewRecorder()
+	receiver.handleRaw(rr2, req2)
+
+	if rr2.Code != http.StatusTooManyRequests {
+		t.Errorf("second raw request should be rate limited, got %d", rr2.Code)
+	}
+}
+
+// TestRateLimiting_HealthEndpointExempt verifies that the health endpoint
+// is not rate limited (always available for monitoring).
+func TestRateLimiting_HealthEndpointExempt(t *testing.T) {
+	config := ReceiverConfig{
+		RateLimit: 1,
+		RateBurst: 1,
+	}
+	receiver := NewHECReceiver(config, nil)
+
+	// Send many health check requests - all should succeed
+	for i := 0; i < 100; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/services/collector/health", nil)
+		rr := httptest.NewRecorder()
+		receiver.handleHealth(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("health request %d should always succeed, got %d", i, rr.Code)
+		}
+	}
+}
+
+// TestRateLimiting_ResponseFormat verifies that rate limit responses follow
+// the HEC error format.
+func TestRateLimiting_ResponseFormat(t *testing.T) {
+	const testToken = "test-token"
+	os.Setenv("TEST_HEC_TOKEN", testToken)
+	defer os.Unsetenv("TEST_HEC_TOKEN")
+
+	config := ReceiverConfig{
+		TokenEnv:     "TEST_HEC_TOKEN",
+		MaxEventSize: 1024 * 1024,
+		RateLimit:    1,
+		RateBurst:    0, // Immediately rate limit
+	}
+	receiver := NewHECReceiver(config, nil)
+
+	body := []byte(`{"event":"test"}`)
+	req := httptest.NewRequest(http.MethodPost, "/services/collector/event", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Splunk "+testToken)
+	rr := httptest.NewRecorder()
+	receiver.handleEvent(rr, req)
+
+	// Should be rate limited immediately with burst=0
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", rr.Code)
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("response should be valid JSON: %v", err)
+	}
+
+	if response["code"] != float64(9) {
+		t.Errorf("expected HEC code 9 for rate limit, got %v", response["code"])
+	}
+
+	if response["text"] != "Rate limit exceeded" {
+		t.Errorf("expected rate limit message, got %v", response["text"])
+	}
+}

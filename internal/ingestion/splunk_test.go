@@ -9,7 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/lvonguyen/threatforge/internal/enrichment"
 )
 
 // =============================================================================
@@ -616,5 +620,471 @@ func TestRateLimiting_ResponseFormat(t *testing.T) {
 	retryAfter := rr.Header().Get("Retry-After")
 	if retryAfter != "1" {
 		t.Errorf("expected Retry-After header = 1, got %q", retryAfter)
+	}
+}
+
+// =============================================================================
+// HECSender Tests
+// =============================================================================
+
+// TestNewHECSender_MissingToken verifies that creating a sender without a token
+// in the environment returns an error.
+func TestNewHECSender_MissingToken(t *testing.T) {
+	os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   "https://splunk.example.com:8088",
+	}
+
+	_, err := NewHECSender(config)
+	if err == nil {
+		t.Error("NewHECSender should fail when token env var is empty")
+	}
+
+	if !strings.Contains(err.Error(), "HEC token not found") {
+		t.Errorf("error should mention missing token, got: %v", err)
+	}
+}
+
+// TestNewHECSender_MissingURL verifies that creating a sender without a HEC URL
+// returns an error.
+func TestNewHECSender_MissingURL(t *testing.T) {
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   "", // Missing URL
+	}
+
+	_, err := NewHECSender(config)
+	if err == nil {
+		t.Error("NewHECSender should fail when HEC URL is empty")
+	}
+
+	if !strings.Contains(err.Error(), "HEC URL is required") {
+		t.Errorf("error should mention missing URL, got: %v", err)
+	}
+}
+
+// TestNewHECSender_Success verifies successful sender creation.
+func TestNewHECSender_Success(t *testing.T) {
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   "https://splunk.example.com:8088",
+		Timeout:  10 * time.Second,
+	}
+
+	sender, err := NewHECSender(config)
+	if err != nil {
+		t.Fatalf("NewHECSender should succeed: %v", err)
+	}
+
+	if sender == nil {
+		t.Error("sender should not be nil")
+	}
+}
+
+// TestHECSender_SendBatchEmpty verifies that sending an empty batch is a no-op.
+func TestHECSender_SendBatchEmpty(t *testing.T) {
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   "https://splunk.example.com:8088",
+	}
+
+	sender, _ := NewHECSender(config)
+
+	err := sender.SendBatch(context.Background(), nil)
+	if err != nil {
+		t.Errorf("SendBatch with nil should succeed: %v", err)
+	}
+
+	err = sender.SendBatch(context.Background(), []*enrichment.EnrichedAlert{})
+	if err != nil {
+		t.Errorf("SendBatch with empty slice should succeed: %v", err)
+	}
+}
+
+// TestHECSender_SendSuccess verifies successful event sending.
+func TestHECSender_SendSuccess(t *testing.T) {
+	var receivedAuth string
+	var receivedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(r.Body)
+		receivedBody = buf.Bytes()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Success","code":0}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "my-secret-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv:   "TEST_SENDER_TOKEN",
+		HECURL:     server.URL,
+		Index:      "test_index",
+		SourceType: "test:alert",
+		Source:     "test",
+		Timeout:    5 * time.Second,
+	}
+
+	sender, err := NewHECSender(config)
+	if err != nil {
+		t.Fatalf("NewHECSender failed: %v", err)
+	}
+
+	alert := &enrichment.EnrichedAlert{
+		OriginalAlert: enrichment.Alert{
+			ID:    "alert-001",
+			Host:  "test-host",
+			Title: "Test Alert",
+		},
+		RiskScore:  75,
+		Confidence: 0.9,
+		Timestamp:  time.Now(),
+	}
+
+	err = sender.Send(context.Background(), alert)
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	// Verify Authorization header
+	if receivedAuth != "Splunk my-secret-token" {
+		t.Errorf("expected auth header 'Splunk my-secret-token', got %q", receivedAuth)
+	}
+
+	// Verify body contains expected fields
+	if !strings.Contains(string(receivedBody), "test-host") {
+		t.Error("body should contain host")
+	}
+	if !strings.Contains(string(receivedBody), "test:alert") {
+		t.Error("body should contain sourcetype")
+	}
+
+	// Verify stats
+	stats := sender.Stats()
+	if stats.EventsSent != 1 {
+		t.Errorf("expected EventsSent=1, got %d", stats.EventsSent)
+	}
+	if stats.BytesSent == 0 {
+		t.Error("expected BytesSent > 0")
+	}
+}
+
+// TestHECSender_SendBatchMultiple verifies batch sending of multiple alerts.
+func TestHECSender_SendBatchMultiple(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Success","code":0}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	alerts := make([]*enrichment.EnrichedAlert, 5)
+	for i := 0; i < 5; i++ {
+		alerts[i] = &enrichment.EnrichedAlert{
+			OriginalAlert: enrichment.Alert{ID: "alert-" + string(rune('0'+i))},
+			Timestamp:     time.Now(),
+		}
+	}
+
+	err := sender.SendBatch(context.Background(), alerts)
+	if err != nil {
+		t.Fatalf("SendBatch failed: %v", err)
+	}
+
+	if atomic.LoadInt32(&requestCount) != 1 {
+		t.Errorf("expected 1 HTTP request for batch, got %d", requestCount)
+	}
+
+	stats := sender.Stats()
+	if stats.EventsSent != 5 {
+		t.Errorf("expected EventsSent=5, got %d", stats.EventsSent)
+	}
+}
+
+// TestHECSender_RetryOnFailure verifies retry behavior on HTTP errors.
+func TestHECSender_RetryOnFailure(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := atomic.AddInt32(&requestCount, 1)
+		if count < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"text":"Server busy","code":6}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Success","code":0}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv:   "TEST_SENDER_TOKEN",
+		HECURL:     server.URL,
+		Timeout:    5 * time.Second,
+		RetryCount: 3,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	alert := &enrichment.EnrichedAlert{
+		OriginalAlert: enrichment.Alert{ID: "test"},
+		Timestamp:     time.Now(),
+	}
+
+	err := sender.Send(context.Background(), alert)
+	if err != nil {
+		t.Fatalf("Send should succeed after retries: %v", err)
+	}
+
+	if atomic.LoadInt32(&requestCount) != 3 {
+		t.Errorf("expected 3 attempts, got %d", requestCount)
+	}
+}
+
+// TestHECSender_AllRetriesFail verifies failure after exhausting retries.
+func TestHECSender_AllRetriesFail(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"text":"Server busy","code":6}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv:   "TEST_SENDER_TOKEN",
+		HECURL:     server.URL,
+		Timeout:    5 * time.Second,
+		RetryCount: 2, // Will make 3 total attempts (1 + 2 retries)
+	}
+
+	sender, _ := NewHECSender(config)
+
+	alert := &enrichment.EnrichedAlert{
+		OriginalAlert: enrichment.Alert{ID: "test"},
+		Timestamp:     time.Now(),
+	}
+
+	err := sender.Send(context.Background(), alert)
+	if err == nil {
+		t.Error("Send should fail after exhausting retries")
+	}
+
+	if !strings.Contains(err.Error(), "failed after") {
+		t.Errorf("error should mention retry failure, got: %v", err)
+	}
+
+	// 1 initial + 2 retries = 3 total
+	if atomic.LoadInt32(&requestCount) != 3 {
+		t.Errorf("expected 3 attempts, got %d", requestCount)
+	}
+
+	// Verify failed events are tracked
+	stats := sender.Stats()
+	if stats.EventsFailed != 1 {
+		t.Errorf("expected EventsFailed=1, got %d", stats.EventsFailed)
+	}
+}
+
+// TestHECSender_HealthCheckSuccess verifies health check on healthy endpoint.
+func TestHECSender_HealthCheckSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/services/collector/health" {
+			t.Errorf("expected health path, got %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	err := sender.HealthCheck(context.Background())
+	if err != nil {
+		t.Errorf("HealthCheck should succeed: %v", err)
+	}
+}
+
+// TestHECSender_HealthCheckFailure verifies health check on unhealthy endpoint.
+func TestHECSender_HealthCheckFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	err := sender.HealthCheck(context.Background())
+	if err == nil {
+		t.Error("HealthCheck should fail on unhealthy endpoint")
+	}
+
+	if !strings.Contains(err.Error(), "status 503") {
+		t.Errorf("error should mention status code, got: %v", err)
+	}
+}
+
+// TestHECSender_StatsConcurrent verifies thread-safe stats updates.
+func TestHECSender_StatsConcurrent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Success","code":0}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	const numRequests = 50
+	done := make(chan bool, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func() {
+			alert := &enrichment.EnrichedAlert{
+				OriginalAlert: enrichment.Alert{ID: "test"},
+				Timestamp:     time.Now(),
+			}
+			sender.Send(context.Background(), alert)
+			done <- true
+		}()
+	}
+
+	for i := 0; i < numRequests; i++ {
+		<-done
+	}
+
+	stats := sender.Stats()
+	if stats.EventsSent != numRequests {
+		t.Errorf("expected EventsSent=%d, got %d", numRequests, stats.EventsSent)
+	}
+}
+
+// TestHECSender_TokenCached verifies token is read from struct, not env.
+func TestHECSender_TokenCached(t *testing.T) {
+	var receivedAuth string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Success","code":0}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "original-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	// Change the env var after sender creation
+	os.Setenv("TEST_SENDER_TOKEN", "changed-token")
+
+	alert := &enrichment.EnrichedAlert{
+		OriginalAlert: enrichment.Alert{ID: "test"},
+		Timestamp:     time.Now(),
+	}
+
+	sender.Send(context.Background(), alert)
+
+	// Should use original cached token, not the changed one
+	if receivedAuth != "Splunk original-token" {
+		t.Errorf("expected cached token 'original-token', got auth header: %q", receivedAuth)
+	}
+}
+
+// TestHECSender_ContextCancellation verifies request cancellation via context.
+func TestHECSender_ContextCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(5 * time.Second) // Slow response
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  10 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	alert := &enrichment.EnrichedAlert{
+		OriginalAlert: enrichment.Alert{ID: "test"},
+		Timestamp:     time.Now(),
+	}
+
+	err := sender.Send(ctx, alert)
+	if err == nil {
+		t.Error("Send should fail when context is cancelled")
 	}
 }

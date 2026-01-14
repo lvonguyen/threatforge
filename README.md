@@ -1,4 +1,4 @@
-# ThreatForge
+# <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/rapid7-dark.svg" width="32" height="32" alt="ThreatForge"> ThreatForge
 
 **Detection Engineering Pipeline with Threat Intelligence Correlation**
 
@@ -20,6 +20,81 @@ ThreatForge addresses these with:
 - SOAR integration for automated response
 
 ## Architecture
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'fontFamily': 'Georgia'}}}%%
+flowchart TB
+    subgraph INPUT["INPUT SOURCES"]
+        style INPUT fill:#3b82f6,stroke:#1e40af,color:#fff
+        HEC[Splunk HEC<br/>Webhook]
+        KAFKA[Kafka<br/>Consumer]
+        SYSLOG[Syslog<br/>RFC 5424]
+        PUBSUB[Cloud<br/>Pub/Sub]
+    end
+
+    subgraph DETECTION["DETECTION ENGINE"]
+        style DETECTION fill:#1e40af,stroke:#0f172a,color:#fff
+        SIGMA[Sigma Rule<br/>Evaluator<br/>1000+ rules]
+        CUSTOM[Custom Rule<br/>Engine<br/>YARA-L style]
+        ML[ML Anomaly<br/>Detector<br/>Behavioral baselines]
+    end
+
+    subgraph THREATINTEL["THREAT INTEL CORRELATION"]
+        style THREATINTEL fill:#f59e0b,stroke:#b45309,color:#fff
+        MISP[MISP]
+        OTX[OTX<br/>AlienVault]
+        VT[VirusTotal]
+        GN[GreyNoise]
+        ABUSE[AbuseIPDB]
+        CACHE[(IOC Cache<br/>Redis)]
+    end
+
+    subgraph ENRICHMENT["ENRICHMENT & SCORING"]
+        style ENRICHMENT fill:#22c55e,stroke:#15803d,color:#fff
+        ENRICH[Alert + Detection Match<br/>+ Threat Intel Context<br/>+ Risk Score]
+    end
+
+    subgraph OUTPUT["OUTPUT DESTINATIONS"]
+        style OUTPUT fill:#ef4444,stroke:#b91c1c,color:#fff
+        SPLUNK_OUT[Splunk HEC<br/>enriched]
+        SOAR[SOAR<br/>Phantom/XSOAR]
+        SNOW[ServiceNow<br/>SecOps]
+        NOTIFY[Slack/Teams<br/>PagerDuty]
+    end
+
+    HEC --> SIGMA
+    KAFKA --> SIGMA
+    SYSLOG --> SIGMA
+    PUBSUB --> SIGMA
+    HEC --> CUSTOM
+    KAFKA --> CUSTOM
+    SYSLOG --> CUSTOM
+    PUBSUB --> CUSTOM
+    HEC --> ML
+    KAFKA --> ML
+    SYSLOG --> ML
+    PUBSUB --> ML
+
+    SIGMA --> MISP
+    CUSTOM --> MISP
+    ML --> MISP
+
+    MISP --> CACHE
+    OTX --> CACHE
+    VT --> CACHE
+    GN --> CACHE
+    ABUSE --> CACHE
+
+    CACHE --> ENRICH
+
+    ENRICH --> SPLUNK_OUT
+    ENRICH --> SOAR
+    ENRICH --> SNOW
+    ENRICH --> NOTIFY
+```
+
+<details>
+<summary>ASCII Diagram (Legacy)</summary>
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -105,6 +180,8 @@ ThreatForge addresses these with:
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+</details>
 
 ## Repository Structure
 
@@ -208,7 +285,7 @@ tags:
 - Daily/hourly threat hunting
 - Best for: Retrospective analysis
 
-### Telemetry Hub (Merged)
+### <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/prometheus.svg" width="24" height="24" alt="Telemetry"> Telemetry Hub (Merged)
 
 Multi-source security telemetry aggregation and normalization:
 
@@ -223,7 +300,7 @@ Multi-source security telemetry aggregation and normalization:
 - **Identity Enrichment**: Context from Entra ID/Okta
 - **Asset Enrichment**: CMDB integration for business context
 
-### Auto-Remediation Agents (Merged)
+### <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/vault.svg" width="24" height="24" alt="Security"> Auto-Remediation Agents (Merged)
 
 Automated response to security findings:
 
@@ -324,7 +401,7 @@ curl -X POST http://localhost:8080/api/v1/ingest \
 - [ ] Kafka streaming mode
 - [ ] Multi-tenant support
 
-## Observability
+## <img src="../../../../reference/templates/icons/homelab-svg-assets/assets/grafana.svg" width="32" height="32" alt="Observability"> Observability
 
 - **Logging**: Structured JSON logging with zap
 - **Metrics**: Prometheus metrics at `/metrics`

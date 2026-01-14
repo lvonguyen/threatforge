@@ -189,8 +189,22 @@ func (r *HECReceiver) handleRaw(w http.ResponseWriter, req *http.Request) {
 		Index:      req.URL.Query().Get("index"),
 	}}
 
+	// Update stats
+	r.mu.Lock()
+	r.stats.EventsReceived += int64(len(events))
+	r.stats.BytesReceived += int64(len(body))
+	r.stats.LastEventAt = time.Now()
+	r.mu.Unlock()
+
+	// Process events with proper error handling
 	if r.handler != nil {
-		r.handler(req.Context(), events)
+		if err := r.handler(req.Context(), events); err != nil {
+			r.mu.Lock()
+			r.stats.EventsDropped += int64(len(events))
+			r.mu.Unlock()
+			http.Error(w, `{"text":"Error processing events","code":8}`, http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -209,17 +223,16 @@ func (r *HECReceiver) handleHealth(w http.ResponseWriter, req *http.Request) {
 func (r *HECReceiver) validateToken(req *http.Request) bool {
 	expectedToken := os.Getenv(r.config.TokenEnv)
 	if expectedToken == "" {
-		return true // No token configured, allow all
+		return false // Fail closed: reject requests when token not configured
 	}
 
-	// Check Authorization header
+	// Only accept Authorization header (not query params to avoid log exposure)
 	auth := req.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Splunk ") {
-		return strings.TrimPrefix(auth, "Splunk ") == expectedToken
+	if !strings.HasPrefix(auth, "Splunk ") {
+		return false
 	}
 
-	// Check query parameter
-	return req.URL.Query().Get("token") == expectedToken
+	return strings.TrimPrefix(auth, "Splunk ") == expectedToken
 }
 
 // parseEvents parses HEC event body (JSON or newline-delimited).
@@ -232,9 +245,14 @@ func (r *HECReceiver) parseEvents(body []byte) ([]HECEvent, error) {
 		return []HECEvent{single}, nil
 	}
 
-	// Try newline-delimited JSON
+	// Try newline-delimited JSON with batch size limit
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	for decoder.More() {
+		// Enforce MaxBatchSize to prevent DoS
+		if len(events) >= r.config.MaxBatchSize {
+			return nil, fmt.Errorf("batch exceeds maximum size of %d events", r.config.MaxBatchSize)
+		}
+
 		var event HECEvent
 		if err := decoder.Decode(&event); err != nil {
 			return nil, fmt.Errorf("failed to parse event: %w", err)
@@ -347,21 +365,35 @@ func (s *HECSender) SendBatch(ctx context.Context, alerts []*enrichment.Enriched
 
 	// Serialize as newline-delimited JSON
 	var buf bytes.Buffer
+	var marshalErrors int
 	for _, event := range events {
 		data, err := json.Marshal(event)
 		if err != nil {
+			marshalErrors++
 			continue
 		}
 		buf.Write(data)
 		buf.WriteByte('\n')
 	}
 
+	// Track marshal failures in stats
+	if marshalErrors > 0 {
+		s.mu.Lock()
+		s.stats.EventsFailed += int64(marshalErrors)
+		s.mu.Unlock()
+	}
+
+	// If all events failed to marshal, return error
+	if buf.Len() == 0 {
+		return fmt.Errorf("failed to marshal all %d events", len(alerts))
+	}
+
 	// Send to Splunk
-	return s.sendWithRetry(ctx, buf.Bytes())
+	return s.sendWithRetry(ctx, buf.Bytes(), len(events)-marshalErrors)
 }
 
 // sendWithRetry sends data with retries.
-func (s *HECSender) sendWithRetry(ctx context.Context, data []byte) error {
+func (s *HECSender) sendWithRetry(ctx context.Context, data []byte, eventCount int) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= s.config.RetryCount; attempt++ {
@@ -370,7 +402,7 @@ func (s *HECSender) sendWithRetry(ctx context.Context, data []byte) error {
 			time.Sleep(time.Duration(attempt*attempt) * time.Second)
 		}
 
-		err := s.send(ctx, data)
+		err := s.send(ctx, data, eventCount)
 		if err == nil {
 			return nil
 		}
@@ -378,14 +410,14 @@ func (s *HECSender) sendWithRetry(ctx context.Context, data []byte) error {
 	}
 
 	s.mu.Lock()
-	s.stats.EventsFailed++
+	s.stats.EventsFailed += int64(eventCount) // Count actual events, not batches
 	s.mu.Unlock()
 
 	return fmt.Errorf("failed after %d retries: %w", s.config.RetryCount, lastErr)
 }
 
 // send performs the actual HTTP request.
-func (s *HECSender) send(ctx context.Context, data []byte) error {
+func (s *HECSender) send(ctx context.Context, data []byte, eventCount int) error {
 	url := strings.TrimSuffix(s.config.HECURL, "/") + "/services/collector/event"
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
@@ -408,9 +440,9 @@ func (s *HECSender) send(ctx context.Context, data []byte) error {
 		return fmt.Errorf("HEC returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Update stats
+	// Update stats with actual event count
 	s.mu.Lock()
-	s.stats.EventsSent++
+	s.stats.EventsSent += int64(eventCount)
 	s.stats.BytesSent += int64(len(data))
 	s.stats.LastSendAt = time.Now()
 	s.mu.Unlock()

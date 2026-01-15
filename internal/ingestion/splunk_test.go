@@ -1088,3 +1088,127 @@ func TestHECSender_ContextCancellation(t *testing.T) {
 		t.Error("Send should fail when context is cancelled")
 	}
 }
+
+// TestHECSender_SendBatchNilEntries verifies nil entries in batch are skipped.
+func TestHECSender_SendBatchNilEntries(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"Success","code":0}`))
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	// Mix of valid and nil entries
+	alerts := []*enrichment.EnrichedAlert{
+		{OriginalAlert: enrichment.Alert{ID: "alert-1"}, Timestamp: time.Now()},
+		nil, // Should be skipped
+		{OriginalAlert: enrichment.Alert{ID: "alert-2"}, Timestamp: time.Now()},
+		nil, // Should be skipped
+		{OriginalAlert: enrichment.Alert{ID: "alert-3"}, Timestamp: time.Now()},
+	}
+
+	err := sender.SendBatch(context.Background(), alerts)
+	if err != nil {
+		t.Fatalf("SendBatch should succeed with nil entries: %v", err)
+	}
+
+	// Should have sent 3 events (skipped 2 nils)
+	stats := sender.Stats()
+	if stats.EventsSent != 3 {
+		t.Errorf("expected EventsSent=3, got %d", stats.EventsSent)
+	}
+}
+
+// TestHECSender_SendBatchAllNil verifies batch of all nils is handled.
+func TestHECSender_SendBatchAllNil(t *testing.T) {
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("should not make HTTP request for all-nil batch")
+	}))
+	defer server.Close()
+
+	config := SenderConfig{
+		TokenEnv: "TEST_SENDER_TOKEN",
+		HECURL:   server.URL,
+		Timeout:  5 * time.Second,
+	}
+
+	sender, _ := NewHECSender(config)
+
+	alerts := []*enrichment.EnrichedAlert{nil, nil, nil}
+
+	err := sender.SendBatch(context.Background(), alerts)
+	// Should fail because all events were nil, resulting in empty buffer
+	if err == nil {
+		t.Error("SendBatch with all nils should fail")
+	}
+}
+
+// TestHECSender_RetryRespectsContext verifies retry backoff respects context cancellation.
+func TestHECSender_RetryRespectsContext(t *testing.T) {
+	var requestCount int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	os.Setenv("TEST_SENDER_TOKEN", "test-token")
+	defer os.Unsetenv("TEST_SENDER_TOKEN")
+
+	config := SenderConfig{
+		TokenEnv:   "TEST_SENDER_TOKEN",
+		HECURL:     server.URL,
+		Timeout:    5 * time.Second,
+		RetryCount: 5, // Would take 1+4+9+16+25 = 55 seconds without context
+	}
+
+	sender, _ := NewHECSender(config)
+
+	// Cancel context after 200ms - should abort during first backoff
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	alert := &enrichment.EnrichedAlert{
+		OriginalAlert: enrichment.Alert{ID: "test"},
+		Timestamp:     time.Now(),
+	}
+
+	start := time.Now()
+	err := sender.Send(ctx, alert)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Error("Send should fail when context is cancelled during retry")
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
+	}
+
+	// Should complete in ~200ms, not 55+ seconds
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("retry should respect context cancellation, took %v", elapsed)
+	}
+
+	// Should have made only 1-2 attempts before context cancelled
+	if atomic.LoadInt32(&requestCount) > 2 {
+		t.Errorf("expected 1-2 attempts before context cancel, got %d", requestCount)
+	}
+}

@@ -2,9 +2,75 @@
 
 # ThreatForge
 
+![Development Status](https://img.shields.io/badge/status-active%20development-blue)
+![Implementation](https://img.shields.io/badge/implementation-45%25-yellow)
+
 **Detection Engineering Pipeline with Threat Intelligence Correlation**
 
 ThreatForge is an enterprise-grade detection pipeline that enriches security alerts with threat intelligence, applies ML-based anomaly detection, and integrates seamlessly with existing Splunk deployments. It enables Detection-as-Code workflows using Sigma rules while providing real-time IOC correlation from multiple threat intel feeds.
+
+---
+
+## Implementation Status
+
+> **Current State:** Active development (~45% complete). Core ingestion and threat intel providers functional.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Ingestion** | | |
+| Splunk HEC integration | Done | Ingest + output working |
+| Kafka consumer | Not Started | Interface defined |
+| Syslog receiver | Not Started | |
+| Cloud Pub/Sub | Not Started | |
+| **Threat Intel** | | |
+| Provider abstraction | Done | Interface pattern |
+| MISP client | Done | Full API integration |
+| AlienVault OTX | Done | Basic implementation |
+| VirusTotal | Partial | API defined, not tested |
+| GreyNoise | Not Started | |
+| AbuseIPDB | Not Started | |
+| **Detection Engine** | | |
+| Sigma rule loader | Partial | go-sigma integration started |
+| Custom rule engine | Not Started | YARA-L style planned |
+| ML anomaly detector | Not Started | Design only |
+| **Enrichment** | | |
+| Redis IOC cache | Not Started | Schema defined |
+| MITRE ATT&CK mapping | Done | Technique mapping complete |
+| Risk scoring | Partial | Basic implementation |
+| **Output** | | |
+| Splunk HEC output | Done | Enriched events |
+| SOAR webhook | Not Started | |
+| ServiceNow SecOps | Not Started | |
+| Notifications | Not Started | |
+| **Testing** | | |
+| Unit tests | 10% | Minimal coverage |
+| Integration tests | 0% | |
+
+---
+
+## Known Limitations
+
+This is a **portfolio reference implementation**, not production software:
+
+1. **11 TODO Placeholders** - Several functions in main.go have placeholder implementations
+2. **Limited Threat Intel** - Only MISP/OTX fully integrated, others stubbed
+3. **No Redis Cache** - IOC caching not implemented (hits providers directly)
+4. **Sigma Engine Partial** - Rule loading works, full evaluation incomplete
+5. **No ML Pipeline** - Anomaly detection designed but not built
+6. **No Streaming Mode** - Kafka/Kinesis integrations not implemented
+7. **Minimal Tests** - ~10% unit test coverage
+8. **Telemetry Hub** - Merged module has interface-only implementations
+9. **Auto-Remediation** - Action library designed, not executed
+
+**Production Requirements:**
+- Complete TODO implementations in main.go
+- Implement Redis IOC cache layer
+- Finish Sigma rule evaluation engine
+- Add remaining threat intel providers
+- Build ML anomaly detection pipeline
+- Comprehensive test coverage
+
+---
 
 ## What This Solves
 
@@ -385,26 +451,31 @@ curl -X POST http://localhost:8080/api/v1/ingest \
 ### Phase 1: Core Pipeline (Current)
 - [x] Splunk HEC integration (ingest + output)
 - [x] MISP threat intel provider
-- [x] Sigma rule evaluator
-- [ ] OTX/VirusTotal integration
-- [ ] Redis IOC cache
+- [x] AlienVault OTX provider
+- [x] MITRE ATT&CK mapping
+- [ ] Complete Sigma rule evaluator
+- [ ] VirusTotal/GreyNoise/AbuseIPDB integration
+- [ ] Redis IOC cache implementation
+- [ ] Resolve TODO placeholders in main.go
 
 ### Phase 2: Detection Engineering
 - [ ] Git-based rule sync
 - [ ] Rule testing framework
 - [ ] MITRE ATT&CK coverage dashboard
-- [ ] Custom rule DSL
+- [ ] Custom rule DSL (YARA-L style)
+- [ ] Unit test coverage (target: 80%)
 
 ### Phase 3: ML & Analytics
 - [ ] Behavioral baseline engine
-- [ ] Anomaly detection models
-- [ ] Entity risk scoring
+- [ ] Anomaly detection models (Python sidecar)
+- [ ] Entity risk scoring refinement
 - [ ] Threat hunting notebooks
 
 ### Phase 4: Enterprise Integration
-- [ ] SOAR webhook outputs
+- [ ] SOAR webhook outputs (Phantom/XSOAR)
 - [ ] ServiceNow SecOps integration
 - [ ] Kafka streaming mode
+- [ ] Syslog/Pub-Sub ingestion
 - [ ] Multi-tenant support
 
 <img src="../../../reference/templates/icons/homelab-svg-assets/assets/grafana.svg" width="32" height="32" alt="Observability">

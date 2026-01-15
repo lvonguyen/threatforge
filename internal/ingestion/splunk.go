@@ -116,11 +116,14 @@ func (r *HECReceiver) Start(ctx context.Context) error {
 		WriteTimeout: r.config.WriteTimeout,
 	}
 
+	// Capture server in local var to avoid race condition if context
+	// is cancelled before goroutine accesses r.server
+	server := r.server
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		r.server.Shutdown(shutdownCtx)
+		server.Shutdown(shutdownCtx)
 	}()
 
 	if r.config.TLSCertFile != "" && r.config.TLSKeyFile != "" {

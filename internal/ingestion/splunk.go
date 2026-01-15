@@ -5,6 +5,7 @@ package splunk
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -262,7 +263,7 @@ func (r *HECReceiver) handleHealth(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte(`{"text":"HEC is healthy","code":17}`))
 }
 
-// validateToken checks the HEC token.
+// validateToken checks the HEC token using constant-time comparison.
 func (r *HECReceiver) validateToken(req *http.Request) bool {
 	if r.token == "" {
 		return false // Fail closed: reject requests when token not configured
@@ -274,7 +275,9 @@ func (r *HECReceiver) validateToken(req *http.Request) bool {
 		return false
 	}
 
-	return strings.TrimPrefix(auth, "Splunk ") == r.token
+	// Use constant-time comparison to prevent timing attacks
+	providedToken := strings.TrimPrefix(auth, "Splunk ")
+	return subtle.ConstantTimeCompare([]byte(providedToken), []byte(r.token)) == 1
 }
 
 // parseEvents parses HEC event body (JSON or newline-delimited).
@@ -392,6 +395,9 @@ func (s *HECSender) SendBatch(ctx context.Context, alerts []*enrichment.Enriched
 	// Build HEC events
 	var events []HECEvent
 	for _, alert := range alerts {
+		if alert == nil {
+			continue // Skip nil entries to prevent panic
+		}
 		events = append(events, HECEvent{
 			Time:       float64(alert.Timestamp.Unix()),
 			Host:       alert.OriginalAlert.Host,
@@ -442,8 +448,13 @@ func (s *HECSender) sendWithRetry(ctx context.Context, data []byte, eventCount i
 
 	for attempt := 0; attempt <= s.config.RetryCount; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff
-			time.Sleep(time.Duration(attempt*attempt) * time.Second)
+			// Exponential backoff with context cancellation support
+			backoff := time.Duration(attempt*attempt) * time.Second
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
 
 		err := s.send(ctx, data, eventCount)

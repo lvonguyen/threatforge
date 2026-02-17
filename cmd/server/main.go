@@ -7,16 +7,21 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/lvonguyen/threatforge/internal/config"
+	"github.com/lvonguyen/threatforge/internal/enrichment"
 	"github.com/lvonguyen/threatforge/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // Version information (injected at build time via ldflags)
@@ -26,8 +31,24 @@ var (
 	BuildTime = "unknown"
 )
 
-// Global repository manager
-var repoManager *repository.Manager
+// Global managers and state
+var (
+	repoManager   *repository.Manager
+	redisClient   *redis.Client
+	cfg           *config.Config
+	tiProviders   []enrichment.Provider
+	pipelineStats *Stats
+)
+
+// Stats holds pipeline statistics.
+type Stats struct {
+	EventsReceived  atomic.Int64 `json:"events_received"`
+	EventsEnriched  atomic.Int64 `json:"events_enriched"`
+	EventsFailed    atomic.Int64 `json:"events_failed"`
+	CacheHits       atomic.Int64 `json:"cache_hits"`
+	CacheMisses     atomic.Int64 `json:"cache_misses"`
+	ThreatMatches   atomic.Int64 `json:"threat_matches"`
+}
 
 func main() {
 	// Parse command-line flags
@@ -47,11 +68,35 @@ func main() {
 	logger.Printf("Starting ThreatForge %s", Version)
 	logger.Printf("Config: %s", *configPath)
 
-	// TODO: Load configuration
-	// cfg, err := config.Load(*configPath)
+	// Load configuration
+	var err error
+	cfg, err = config.Load(*configPath)
+	if err != nil {
+		logger.Printf("Warning: Failed to load config, using defaults: %v", err)
+		cfg = config.DefaultConfig()
+	}
+
+	// Initialize pipeline stats
+	pipelineStats = &Stats{}
+
+	// Initialize Redis client
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: os.Getenv(cfg.Redis.PasswordEnv),
+		DB:       cfg.Redis.DB,
+		PoolSize: cfg.Redis.PoolSize,
+	})
+	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+		logger.Printf("Warning: Redis not available: %v (cache disabled)", err)
+		redisClient = nil
+	} else {
+		logger.Printf("Redis connected: %s", cfg.Redis.Addr)
+	}
+
+	// Initialize threat intel providers
+	tiProviders = initThreatIntelProviders(cfg, logger)
 
 	// Initialize repository manager
-	var err error
 	repoManager, err = repository.NewManager("repositories")
 	if err != nil {
 		logger.Printf("Warning: Repository manager initialization failed: %v", err)
@@ -160,42 +205,190 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleReady(w http.ResponseWriter, r *http.Request) {
-	// TODO: Check dependencies (Redis, threat intel providers)
 	w.Header().Set("Content-Type", "application/json")
+
+	status := map[string]any{
+		"status":    "ready",
+		"redis":     redisClient != nil,
+		"providers": len(tiProviders),
+	}
+
+	// Check Redis connectivity
+	if redisClient != nil {
+		if err := redisClient.Ping(r.Context()).Err(); err != nil {
+			status["redis_error"] = err.Error()
+			status["status"] = "degraded"
+		}
+	}
+
+	// Check providers health
+	for _, p := range tiProviders {
+		if err := p.HealthCheck(r.Context()); err != nil {
+			status[p.Name()+"_error"] = err.Error()
+			status["status"] = "degraded"
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ready"}`))
+	json.NewEncoder(w).Encode(status)
 }
 
 // Ingest handlers
 
 func handleIngest(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement single event ingestion
 	w.Header().Set("Content-Type", "application/json")
+
+	var req IngestRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	pipelineStats.EventsReceived.Add(1)
+
+	// Cache event if Redis available
+	if redisClient != nil && req.Event != nil {
+		eventJSON, _ := json.Marshal(req.Event)
+		redisClient.LPush(r.Context(), "threatforge:ingest:queue", eventJSON)
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"received"}`))
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "received",
+		"event_id": fmt.Sprintf("evt-%d", pipelineStats.EventsReceived.Load()),
+	})
 }
 
 func handleIngestBatch(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement batch event ingestion
 	w.Header().Set("Content-Type", "application/json")
+
+	var events []IngestRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 10<<20)).Decode(&events); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON array"})
+		return
+	}
+
+	count := len(events)
+	pipelineStats.EventsReceived.Add(int64(count))
+
+	// Queue events if Redis available
+	if redisClient != nil && count > 0 {
+		pipe := redisClient.Pipeline()
+		for _, evt := range events {
+			eventJSON, _ := json.Marshal(evt.Event)
+			pipe.LPush(r.Context(), "threatforge:ingest:queue", eventJSON)
+		}
+		pipe.Exec(r.Context())
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"received","count":0}`))
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "received",
+		"count":  count,
+	})
 }
 
 // Enrichment handlers
 
 func handleEnrich(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement alert enrichment
 	w.Header().Set("Content-Type", "application/json")
+
+	var req EnrichRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	enriched := enrichment.EnrichedAlert{
+		OriginalAlert: req.Alert,
+		Timestamp:     time.Now(),
+	}
+
+	// Extract IOCs from alert and check against providers
+	iocs := extractIOCs(req.Alert)
+	for _, ioc := range iocs {
+		for _, provider := range tiProviders {
+			match, err := provider.CheckIOC(r.Context(), ioc.Type, ioc.Value)
+			if err != nil {
+				continue
+			}
+			if match != nil {
+				enriched.ThreatIntel = append(enriched.ThreatIntel, *match)
+				pipelineStats.ThreatMatches.Add(1)
+			}
+		}
+	}
+
+	// Calculate risk score based on matches
+	enriched.RiskScore = calculateRiskScore(enriched.ThreatIntel)
+	enriched.Confidence = calculateConfidence(enriched.ThreatIntel)
+
+	pipelineStats.EventsEnriched.Add(1)
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"enriched"}`))
+	json.NewEncoder(w).Encode(enriched)
 }
 
 func handleEnrichIOC(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement IOC lookup
 	w.Header().Set("Content-Type", "application/json")
+
+	var req IOCRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	if req.Type == "" || req.Value == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "type and value required"})
+		return
+	}
+
+	iocType := enrichment.IOCType(req.Type)
+	cacheKey := fmt.Sprintf("ioc:%s:%s", req.Type, req.Value)
+
+	// Check cache first
+	if redisClient != nil {
+		if cached, err := redisClient.Get(r.Context(), cacheKey).Result(); err == nil {
+			pipelineStats.CacheHits.Add(1)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(cached))
+			return
+		}
+	}
+	pipelineStats.CacheMisses.Add(1)
+
+	// Query providers
+	var matches []enrichment.Match
+	for _, provider := range tiProviders {
+		match, err := provider.CheckIOC(r.Context(), iocType, req.Value)
+		if err != nil {
+			continue
+		}
+		if match != nil {
+			matches = append(matches, *match)
+			pipelineStats.ThreatMatches.Add(1)
+		}
+	}
+
+	result := map[string]any{
+		"found":   len(matches) > 0,
+		"matches": matches,
+		"sources": len(tiProviders),
+	}
+
+	// Cache result
+	if redisClient != nil {
+		resultJSON, _ := json.Marshal(result)
+		redisClient.Set(r.Context(), cacheKey, resultJSON, cfg.Redis.CacheTTL)
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"found":false}`))
+	json.NewEncoder(w).Encode(result)
 }
 
 // Detection handlers
@@ -217,26 +410,102 @@ func handleReloadRules(w http.ResponseWriter, r *http.Request) {
 // Stats handler
 
 func handleStats(w http.ResponseWriter, r *http.Request) {
-	// TODO: Return pipeline statistics
 	w.Header().Set("Content-Type", "application/json")
+
+	stats := map[string]any{
+		"events_received": pipelineStats.EventsReceived.Load(),
+		"events_enriched": pipelineStats.EventsEnriched.Load(),
+		"events_failed":   pipelineStats.EventsFailed.Load(),
+		"cache_hits":      pipelineStats.CacheHits.Load(),
+		"cache_misses":    pipelineStats.CacheMisses.Load(),
+		"threat_matches":  pipelineStats.ThreatMatches.Load(),
+		"providers":       len(tiProviders),
+		"redis_connected": redisClient != nil,
+	}
+
+	// Add provider rate limit status
+	providerStats := make(map[string]any)
+	for _, p := range tiProviders {
+		providerStats[p.Name()] = p.RateLimit()
+	}
+	stats["provider_status"] = providerStats
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"events_received":0,"events_enriched":0,"cache_hits":0}`))
+	json.NewEncoder(w).Encode(stats)
 }
 
 // HEC-compatible handlers
 
 func handleHECEvent(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement HEC event endpoint
 	w.Header().Set("Content-Type", "application/json")
+
+	// Validate HEC token
+	authHeader := r.Header.Get("Authorization")
+	expectedToken := os.Getenv("SPLUNK_HEC_TOKEN_INBOUND")
+	if expectedToken != "" && authHeader != "Splunk "+expectedToken {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"text": "Invalid token", "code": 4})
+		return
+	}
+
+	// Parse HEC event format
+	var events []map[string]any
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 10<<20))
+	for decoder.More() {
+		var evt map[string]any
+		if err := decoder.Decode(&evt); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"text": "Invalid data format", "code": 6})
+			return
+		}
+		events = append(events, evt)
+	}
+
+	pipelineStats.EventsReceived.Add(int64(len(events)))
+
+	// Queue for processing
+	if redisClient != nil {
+		pipe := redisClient.Pipeline()
+		for _, evt := range events {
+			eventJSON, _ := json.Marshal(evt)
+			pipe.LPush(r.Context(), "threatforge:hec:queue", eventJSON)
+		}
+		pipe.Exec(r.Context())
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"text":"Success","code":0}`))
+	json.NewEncoder(w).Encode(map[string]any{"text": "Success", "code": 0})
 }
 
 func handleHECRaw(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement HEC raw endpoint
 	w.Header().Set("Content-Type", "application/json")
+
+	// Validate HEC token
+	authHeader := r.Header.Get("Authorization")
+	expectedToken := os.Getenv("SPLUNK_HEC_TOKEN_INBOUND")
+	if expectedToken != "" && authHeader != "Splunk "+expectedToken {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"text": "Invalid token", "code": 4})
+		return
+	}
+
+	// Read raw data
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"text": "Read error", "code": 6})
+		return
+	}
+
+	pipelineStats.EventsReceived.Add(1)
+
+	// Queue raw event
+	if redisClient != nil {
+		redisClient.LPush(r.Context(), "threatforge:hec:raw", body)
+	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"text":"Success","code":0}`))
+	json.NewEncoder(w).Encode(map[string]any{"text": "Success", "code": 0})
 }
 
 func handleHECHealth(w http.ResponseWriter, r *http.Request) {
@@ -386,5 +655,145 @@ func handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
+}
+
+// initThreatIntelProviders initializes enabled threat intel providers.
+func initThreatIntelProviders(cfg *config.Config, logger *log.Logger) []enrichment.Provider {
+	var providers []enrichment.Provider
+
+	// Initialize OTX if enabled
+	if cfg.ThreatIntel.OTX.Enabled {
+		otxCfg := enrichment.OTXConfig{
+			ProviderConfig: enrichment.ProviderConfig{
+				APIKey:   cfg.ThreatIntel.OTX.APIKeyEnv,
+				Timeout:  cfg.ThreatIntel.OTX.Timeout,
+				CacheTTL: cfg.Redis.CacheTTL,
+			},
+		}
+		otx, err := enrichment.NewOTXProvider(otxCfg)
+		if err != nil {
+			logger.Printf("Warning: OTX provider init failed: %v", err)
+		} else {
+			providers = append(providers, otx)
+			logger.Printf("OTX provider initialized")
+		}
+	}
+
+	// Initialize MISP if enabled
+	if cfg.ThreatIntel.MISP.Enabled {
+		mispCfg := enrichment.MISPConfig{
+			ProviderConfig: enrichment.ProviderConfig{
+				APIKey:   cfg.ThreatIntel.MISP.APIKeyEnv,
+				BaseURL:  cfg.ThreatIntel.MISP.BaseURL,
+				Timeout:  cfg.ThreatIntel.MISP.Timeout,
+				CacheTTL: cfg.Redis.CacheTTL,
+			},
+			VerifySSL:     cfg.ThreatIntel.MISP.VerifySSL,
+			PublishedOnly: cfg.ThreatIntel.MISP.PublishedOnly,
+		}
+		misp, err := enrichment.NewMISPProvider(mispCfg)
+		if err != nil {
+			logger.Printf("Warning: MISP provider init failed: %v", err)
+		} else {
+			providers = append(providers, misp)
+			logger.Printf("MISP provider initialized")
+		}
+	}
+
+	logger.Printf("Threat intel providers initialized: %d", len(providers))
+	return providers
+}
+
+// IngestRequest represents a single event to ingest.
+type IngestRequest struct {
+	Event     map[string]any `json:"event"`
+	Timestamp string         `json:"time,omitempty"`
+	Host      string         `json:"host,omitempty"`
+	Source    string         `json:"source,omitempty"`
+}
+
+// EnrichRequest represents an enrichment request.
+type EnrichRequest struct {
+	Alert enrichment.Alert `json:"alert"`
+}
+
+// IOCRequest represents an IOC lookup request.
+type IOCRequest struct {
+	Type  string `json:"type"`  // ip, domain, url, hash
+	Value string `json:"value"`
+}
+
+// IOC holds an extracted indicator of compromise.
+type IOC struct {
+	Type  enrichment.IOCType
+	Value string
+}
+
+// extractIOCs extracts indicators of compromise from an alert.
+func extractIOCs(alert enrichment.Alert) []IOC {
+	var iocs []IOC
+
+	if alert.SrcIP != "" {
+		iocs = append(iocs, IOC{Type: enrichment.IOCTypeIP, Value: alert.SrcIP})
+	}
+	if alert.DstIP != "" {
+		iocs = append(iocs, IOC{Type: enrichment.IOCTypeIP, Value: alert.DstIP})
+	}
+	if alert.Domain != "" {
+		iocs = append(iocs, IOC{Type: enrichment.IOCTypeDomain, Value: alert.Domain})
+	}
+	if alert.URL != "" {
+		iocs = append(iocs, IOC{Type: enrichment.IOCTypeURL, Value: alert.URL})
+	}
+	if alert.Hash != "" {
+		iocs = append(iocs, IOC{Type: enrichment.IOCTypeHash, Value: alert.Hash})
+	}
+
+	return iocs
+}
+
+// calculateRiskScore computes a risk score (0-100) based on threat matches.
+func calculateRiskScore(matches []enrichment.Match) int {
+	if len(matches) == 0 {
+		return 0
+	}
+
+	var totalScore float64
+	for _, m := range matches {
+		// Base score from severity
+		switch m.Indicator.Severity {
+		case "critical":
+			totalScore += 40
+		case "high":
+			totalScore += 30
+		case "medium":
+			totalScore += 20
+		case "low":
+			totalScore += 10
+		default:
+			totalScore += 5
+		}
+		// Boost for high confidence
+		totalScore += m.Indicator.Confidence * 10
+	}
+
+	score := int(totalScore / float64(len(matches)))
+	if score > 100 {
+		score = 100
+	}
+	return score
+}
+
+// calculateConfidence computes aggregate confidence (0.0-1.0) from matches.
+func calculateConfidence(matches []enrichment.Match) float64 {
+	if len(matches) == 0 {
+		return 0.0
+	}
+
+	var total float64
+	for _, m := range matches {
+		total += m.Indicator.Confidence
+	}
+	return total / float64(len(matches))
 }
 

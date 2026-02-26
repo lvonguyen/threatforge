@@ -4,7 +4,9 @@ package observability
 import (
 	"context"
 	"net/http"
+	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"google.golang.org/grpc/credentials"
 )
 
 // Telemetry provides unified observability for ThreatForge
@@ -56,10 +59,10 @@ type Config struct {
 // Metrics holds Prometheus metrics for ThreatForge
 type Metrics struct {
 	// IOC metrics
-	IOCsIngested  *prometheus.CounterVec
-	IOCsEnriched  *prometheus.CounterVec
-	IOCsMatched   *prometheus.CounterVec
-	IOCsActive    *prometheus.GaugeVec
+	IOCsIngested *prometheus.CounterVec
+	IOCsEnriched *prometheus.CounterVec
+	IOCsMatched  *prometheus.CounterVec
+	IOCsActive   *prometheus.GaugeVec
 
 	// Enrichment metrics
 	EnrichmentDuration *prometheus.HistogramVec
@@ -158,11 +161,16 @@ func (t *Telemetry) initLogger() (*zap.Logger, error) {
 func (t *Telemetry) initTracer() error {
 	ctx := context.Background()
 
-	// Create OTLP exporter
-	exporter, err := otlptracegrpc.New(ctx,
+	// Create OTLP exporter — TLS by default, plaintext only when OTEL_INSECURE=true
+	exporterOpts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(t.config.OTLPEndpoint),
-		otlptracegrpc.WithInsecure(),
-	)
+	}
+	if strings.EqualFold(os.Getenv("OTEL_INSECURE"), "true") {
+		exporterOpts = append(exporterOpts, otlptracegrpc.WithInsecure())
+	} else {
+		exporterOpts = append(exporterOpts, otlptracegrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, "")))
+	}
+	exporter, err := otlptracegrpc.New(ctx, exporterOpts...)
 	if err != nil {
 		return err
 	}
@@ -420,4 +428,3 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 	})
 	return err
 }
-

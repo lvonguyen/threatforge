@@ -19,6 +19,7 @@ import (
 // MISPProvider implements the Provider interface for MISP.
 type MISPProvider struct {
 	config     MISPConfig
+	apiKey     string // cached at startup from os.Getenv(config.APIKey)
 	httpClient *http.Client
 	rateLimit  RateLimitStatus
 	mu         sync.RWMutex
@@ -58,6 +59,7 @@ func NewMISPProvider(config MISPConfig) (*MISPProvider, error) {
 
 	return &MISPProvider{
 		config: config,
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
@@ -112,7 +114,7 @@ func (p *MISPProvider) GetIndicators(ctx context.Context, iocType IOCType, since
 	searchReq := MISPAttributeSearchRequest{
 		Type:      mispType,
 		Timestamp: since.Unix(),
-		Published: p.config.PublishedOnly,
+		Published: &p.config.PublishedOnly,
 	}
 
 	body, err := json.Marshal(searchReq)
@@ -132,12 +134,12 @@ func (p *MISPProvider) GetIndicators(ctx context.Context, iocType IOCType, since
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, fmt.Errorf("MISP returned %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var searchResp MISPAttributeSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&searchResp); err != nil {
 		return nil, fmt.Errorf("failed to decode MISP response: %w", err)
 	}
 
@@ -161,7 +163,7 @@ func (p *MISPProvider) CheckIOC(ctx context.Context, iocType IOCType, value stri
 	searchReq := MISPAttributeSearchRequest{
 		Value:     value,
 		Type:      mispType,
-		Published: p.config.PublishedOnly,
+		Published: &p.config.PublishedOnly,
 	}
 
 	body, err := json.Marshal(searchReq)
@@ -185,7 +187,7 @@ func (p *MISPProvider) CheckIOC(ctx context.Context, iocType IOCType, value stri
 	}
 
 	var searchResp MISPAttributeSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&searchResp); err != nil {
 		return nil, err
 	}
 
@@ -218,7 +220,7 @@ func (p *MISPProvider) CheckBatch(ctx context.Context, iocType IOCType, values [
 	searchReq := MISPAttributeSearchRequest{
 		Value:     strings.Join(values, "||"),
 		Type:      mispType,
-		Published: p.config.PublishedOnly,
+		Published: &p.config.PublishedOnly,
 	}
 
 	body, err := json.Marshal(searchReq)
@@ -242,7 +244,7 @@ func (p *MISPProvider) CheckBatch(ctx context.Context, iocType IOCType, values [
 	}
 
 	var searchResp MISPAttributeSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&searchResp); err != nil {
 		return nil, err
 	}
 
@@ -271,8 +273,7 @@ func (p *MISPProvider) newRequest(ctx context.Context, method, path string, body
 		return nil, err
 	}
 
-	apiKey := os.Getenv(p.config.APIKey)
-	req.Header.Set("Authorization", apiKey)
+	req.Header.Set("Authorization", p.apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -325,7 +326,7 @@ type MISPAttributeSearchRequest struct {
 	Type      string `json:"type,omitempty"`
 	Category  string `json:"category,omitempty"`
 	Timestamp int64  `json:"timestamp,omitempty"`
-	Published bool   `json:"published,omitempty"`
+	Published *bool  `json:"published,omitempty"`
 	Limit     int    `json:"limit,omitempty"`
 }
 
@@ -338,19 +339,19 @@ type MISPAttributeSearchResponse struct {
 
 // MISPAttribute represents a MISP attribute.
 type MISPAttribute struct {
-	ID        string     `json:"id"`
-	UUID      string     `json:"uuid"`
-	EventID   string     `json:"event_id"`
-	Type      string     `json:"type"`
-	Category  string     `json:"category"`
-	Value     string     `json:"value"`
-	Comment   string     `json:"comment"`
-	FirstSeen int64      `json:"first_seen"`
-	LastSeen  int64      `json:"last_seen"`
-	ToIDS     bool       `json:"to_ids"`
-	Timestamp string     `json:"timestamp"`
-	Tag       []MISPTag  `json:"Tag,omitempty"`
-	Event     MISPEvent  `json:"Event,omitempty"`
+	ID        string    `json:"id"`
+	UUID      string    `json:"uuid"`
+	EventID   string    `json:"event_id"`
+	Type      string    `json:"type"`
+	Category  string    `json:"category"`
+	Value     string    `json:"value"`
+	Comment   string    `json:"comment"`
+	FirstSeen int64     `json:"first_seen"`
+	LastSeen  int64     `json:"last_seen"`
+	ToIDS     bool      `json:"to_ids"`
+	Timestamp string    `json:"timestamp"`
+	Tag       []MISPTag `json:"Tag,omitempty"`
+	Event     MISPEvent `json:"Event,omitempty"`
 }
 
 // MISPTag represents a MISP tag.

@@ -4,6 +4,7 @@ package playbooks
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -12,15 +13,15 @@ import (
 
 // IRPlaybook represents an incident response playbook
 type IRPlaybook struct {
-	ID          string       `yaml:"id" json:"id"`
-	Name        string       `yaml:"name" json:"name"`
-	Description string       `yaml:"description" json:"description"`
-	Category    string       `yaml:"category" json:"category"` // malware, phishing, data_breach, etc.
-	Severity    string       `yaml:"severity" json:"severity"` // critical, high, medium, low
-	Triggers    []Trigger    `yaml:"triggers" json:"triggers"`
-	Steps       []Step       `yaml:"steps" json:"steps"`
-	Escalation  Escalation   `yaml:"escalation" json:"escalation"`
-	Metadata    Metadata     `yaml:"metadata" json:"metadata"`
+	ID          string     `yaml:"id" json:"id"`
+	Name        string     `yaml:"name" json:"name"`
+	Description string     `yaml:"description" json:"description"`
+	Category    string     `yaml:"category" json:"category"` // malware, phishing, data_breach, etc.
+	Severity    string     `yaml:"severity" json:"severity"` // critical, high, medium, low
+	Triggers    []Trigger  `yaml:"triggers" json:"triggers"`
+	Steps       []Step     `yaml:"steps" json:"steps"`
+	Escalation  Escalation `yaml:"escalation" json:"escalation"`
+	Metadata    Metadata   `yaml:"metadata" json:"metadata"`
 }
 
 // Trigger defines when a playbook should be activated
@@ -36,8 +37,8 @@ type Step struct {
 	ID          string        `yaml:"id" json:"id"`
 	Name        string        `yaml:"name" json:"name"`
 	Description string        `yaml:"description" json:"description"`
-	Type        string        `yaml:"type" json:"type"`     // manual, automated, conditional
-	Owner       string        `yaml:"owner" json:"owner"`   // role responsible
+	Type        string        `yaml:"type" json:"type"`   // manual, automated, conditional
+	Owner       string        `yaml:"owner" json:"owner"` // role responsible
 	Timeout     time.Duration `yaml:"timeout" json:"timeout"`
 	Actions     []Action      `yaml:"actions" json:"actions"`
 	OnSuccess   string        `yaml:"on_success" json:"on_success"` // next step ID
@@ -72,8 +73,10 @@ type Metadata struct {
 	Compliance   []string  `yaml:"compliance" json:"compliance"` // SOC2, PCI-DSS, etc.
 }
 
-// PlaybookManager manages IR playbooks
+// PlaybookManager manages IR playbooks.
+// The mu field protects the playbooks map from concurrent read/write panics.
 type PlaybookManager struct {
+	mu        sync.RWMutex
 	playbooks map[string]*IRPlaybook
 	logger    *zap.Logger
 }
@@ -93,12 +96,16 @@ func NewPlaybookManager(logger *zap.Logger) *PlaybookManager {
 
 // GetPlaybook returns a playbook by ID
 func (pm *PlaybookManager) GetPlaybook(id string) (*IRPlaybook, bool) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
 	pb, ok := pm.playbooks[id]
 	return pb, ok
 }
 
 // GetPlaybooksByCategory returns playbooks for a category
 func (pm *PlaybookManager) GetPlaybooksByCategory(category string) []*IRPlaybook {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
 	result := make([]*IRPlaybook, 0)
 	for _, pb := range pm.playbooks {
 		if pb.Category == category {
@@ -110,6 +117,8 @@ func (pm *PlaybookManager) GetPlaybooksByCategory(category string) []*IRPlaybook
 
 // GetPlaybookForTrigger finds the best matching playbook for a trigger
 func (pm *PlaybookManager) GetPlaybookForTrigger(ctx context.Context, triggerType, source string, tags map[string]string) (*IRPlaybook, error) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
 	for _, pb := range pm.playbooks {
 		for _, trigger := range pb.Triggers {
 			if trigger.Type == triggerType && (trigger.Source == "" || trigger.Source == source) {
@@ -139,7 +148,9 @@ func (pm *PlaybookManager) LoadPlaybook(yamlData []byte) error {
 		return fmt.Errorf("parsing playbook YAML: %w", err)
 	}
 
+	pm.mu.Lock()
 	pm.playbooks[pb.ID] = &pb
+	pm.mu.Unlock()
 	pm.logger.Info("Playbook loaded",
 		zap.String("id", pb.ID),
 		zap.String("name", pb.Name),
@@ -150,7 +161,9 @@ func (pm *PlaybookManager) LoadPlaybook(yamlData []byte) error {
 
 // ExportPlaybook exports a playbook to YAML
 func (pm *PlaybookManager) ExportPlaybook(id string) ([]byte, error) {
+	pm.mu.RLock()
 	pb, ok := pm.playbooks[id]
+	pm.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("playbook not found: %s", id)
 	}
@@ -456,10 +469,11 @@ func (pm *PlaybookManager) loadDefaultPlaybooks() {
 
 // ListPlaybooks returns all playbooks
 func (pm *PlaybookManager) ListPlaybooks() []*IRPlaybook {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
 	result := make([]*IRPlaybook, 0, len(pm.playbooks))
 	for _, pb := range pm.playbooks {
 		result = append(result, pb)
 	}
 	return result
 }
-

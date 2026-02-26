@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -23,11 +25,14 @@ const (
 
 // OTXProvider implements the Provider interface for AlienVault OTX.
 type OTXProvider struct {
-	config     OTXConfig
-	httpClient *http.Client
-	cache      *otxCache
-	rateLimit  RateLimitStatus
-	mu         sync.RWMutex
+	config      OTXConfig
+	apiKey      string // cached at startup from os.Getenv(config.APIKey)
+	httpClient  *http.Client
+	cache       *otxCache
+	sfGroup     singleflight.Group
+	rateLimit   RateLimitStatus
+	mu          sync.RWMutex
+	stopCleanup chan struct{}
 }
 
 // OTXConfig holds OTX-specific configuration.
@@ -120,7 +125,8 @@ func (c *otxCache) cleanup() {
 	}
 }
 
-// NewOTXProvider creates a new OTX provider.
+// NewOTXProvider creates a new OTX provider. The caller should call Stop()
+// when the provider is no longer needed to release the cleanup goroutine.
 func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 	apiKey := os.Getenv(config.APIKey)
 	if apiKey == "" {
@@ -133,6 +139,7 @@ func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 
 	provider := &OTXProvider{
 		config: config,
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
@@ -142,6 +149,7 @@ func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 			Limit:     config.RateLimit,
 			ResetAt:   time.Now().Add(time.Minute),
 		},
+		stopCleanup: make(chan struct{}),
 	}
 
 	// Start background cache cleanup
@@ -150,10 +158,21 @@ func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 	return provider, nil
 }
 
+// Stop signals the background cache cleanup goroutine to exit.
+func (p *OTXProvider) Stop() {
+	close(p.stopCleanup)
+}
+
 func (p *OTXProvider) startCacheCleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
-	for range ticker.C {
-		p.cache.cleanup()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			p.cache.cleanup()
+		case <-p.stopCleanup:
+			return
+		}
 	}
 }
 
@@ -217,12 +236,12 @@ func (p *OTXProvider) GetIndicators(ctx context.Context, iocType IOCType, since 
 	p.updateRateLimit(resp)
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, fmt.Errorf("OTX returned %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var pulseResp OTXPulseListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pulseResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&pulseResp); err != nil {
 		return nil, fmt.Errorf("decoding OTX response: %w", err)
 	}
 
@@ -241,6 +260,7 @@ func (p *OTXProvider) GetIndicators(ctx context.Context, iocType IOCType, since 
 }
 
 // CheckIOC checks if a value exists in OTX.
+// Uses singleflight to prevent thundering herd on concurrent cache misses.
 func (p *OTXProvider) CheckIOC(ctx context.Context, iocType IOCType, value string) (*Match, error) {
 	// Check cache first
 	cacheKey := p.cache.cacheKey(iocType, value)
@@ -251,51 +271,70 @@ func (p *OTXProvider) CheckIOC(ctx context.Context, iocType IOCType, value strin
 		return match, nil
 	}
 
-	// Build API path based on IOC type
-	path, err := p.buildIndicatorPath(iocType, value)
+	// Singleflight: coalesce concurrent requests for the same IOC
+	type sfResult struct {
+		match *Match
+	}
+	v, err, _ := p.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		// Double-check cache after acquiring the singleflight slot
+		if match, notFound, exists := p.cache.get(cacheKey); exists {
+			if notFound {
+				return &sfResult{match: nil}, nil
+			}
+			return &sfResult{match: match}, nil
+		}
+
+		// Build API path based on IOC type
+		path, err := p.buildIndicatorPath(iocType, value)
+		if err != nil {
+			return &sfResult{match: nil}, nil // Unsupported type
+		}
+
+		req, err := p.newRequest(ctx, "GET", path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating check request: %w", err)
+		}
+
+		resp, err := p.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("OTX lookup failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		p.updateRateLimit(resp)
+
+		// 404 means not found in OTX
+		if resp.StatusCode == http.StatusNotFound {
+			p.cache.set(cacheKey, nil, true)
+			return &sfResult{match: nil}, nil
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("OTX returned status %d", resp.StatusCode)
+		}
+
+		var generalResp OTXGeneralResponse
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&generalResp); err != nil {
+			return nil, fmt.Errorf("decoding OTX response: %w", err)
+		}
+
+		// Check if there are any associated pulses (threats)
+		if generalResp.PulseInfo.Count == 0 {
+			p.cache.set(cacheKey, nil, true)
+			return &sfResult{match: nil}, nil
+		}
+
+		// Build match from first pulse
+		match := p.buildMatchFromGeneral(iocType, value, generalResp)
+		p.cache.set(cacheKey, match, false)
+
+		return &sfResult{match: match}, nil
+	})
 	if err != nil {
-		return nil, nil // Unsupported type
+		return nil, err
 	}
 
-	req, err := p.newRequest(ctx, "GET", path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating check request: %w", err)
-	}
-
-	resp, err := p.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("OTX lookup failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	p.updateRateLimit(resp)
-
-	// 404 means not found in OTX
-	if resp.StatusCode == http.StatusNotFound {
-		p.cache.set(cacheKey, nil, true)
-		return nil, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OTX returned status %d", resp.StatusCode)
-	}
-
-	var generalResp OTXGeneralResponse
-	if err := json.NewDecoder(resp.Body).Decode(&generalResp); err != nil {
-		return nil, fmt.Errorf("decoding OTX response: %w", err)
-	}
-
-	// Check if there are any associated pulses (threats)
-	if generalResp.PulseInfo.Count == 0 {
-		p.cache.set(cacheKey, nil, true)
-		return nil, nil
-	}
-
-	// Build match from first pulse
-	match := p.buildMatchFromGeneral(iocType, value, generalResp)
-	p.cache.set(cacheKey, match, false)
-
-	return match, nil
+	return v.(*sfResult).match, nil
 }
 
 // CheckBatch checks multiple IOCs against OTX.
@@ -331,7 +370,10 @@ func (p *OTXProvider) buildIndicatorPath(iocType IOCType, value string) (string,
 
 	switch iocType {
 	case IOCTypeIP:
-		// OTX auto-detects IPv4 vs IPv6
+		// OTX requires explicit IPv4/IPv6 path segments
+		if strings.Contains(value, ":") {
+			return fmt.Sprintf("/indicators/IPv6/%s/general", encodedValue), nil
+		}
 		return fmt.Sprintf("/indicators/IPv4/%s/general", encodedValue), nil
 	case IOCTypeDomain:
 		return fmt.Sprintf("/indicators/domain/%s/general", encodedValue), nil
@@ -343,7 +385,7 @@ func (p *OTXProvider) buildIndicatorPath(iocType IOCType, value string) (string,
 		if hashType == "" {
 			return "", fmt.Errorf("unknown hash type for value: %s", value)
 		}
-		return fmt.Sprintf("/indicators/file/%s/general", encodedValue), nil
+		return fmt.Sprintf("/indicators/file/%s/%s/general", hashType, encodedValue), nil
 	default:
 		return "", fmt.Errorf("unsupported IOC type: %s", iocType)
 	}
@@ -371,8 +413,7 @@ func (p *OTXProvider) newRequest(ctx context.Context, method, path string, body 
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
-	apiKey := os.Getenv(p.config.APIKey)
-	req.Header.Set("X-OTX-API-KEY", apiKey)
+	req.Header.Set("X-OTX-API-KEY", p.apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "ThreatForge/1.0")

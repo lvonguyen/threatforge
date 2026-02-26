@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ var (
 	ErrRepoExists       = errors.New("repository already exists")
 	ErrGitNotInstalled  = errors.New("git is not installed")
 	ErrInvalidLocalPath = errors.New("invalid local path")
+	ErrInvalidBranch    = errors.New("invalid branch name")
 )
 
 // Repository represents a git repository configuration.
@@ -125,6 +127,9 @@ func (m *Manager) Clone(ctx context.Context, repo *Repository) (*CloneResult, er
 	if branch == "" {
 		branch = "main"
 	}
+	if err := validateBranch(branch); err != nil {
+		return nil, err
+	}
 	args = append(args, "--branch", branch)
 
 	// Add single-branch for efficiency
@@ -136,10 +141,14 @@ func (m *Manager) Clone(ctx context.Context, repo *Repository) (*CloneResult, er
 	// Execute git clone
 	cmd := exec.CommandContext(ctx, m.gitPath, args...)
 
-	// Configure SSH key if provided
+	// Configure SSH key if provided (validate path to prevent injection)
 	if repo.SSHKeyPath != "" {
+		cleanPath := filepath.Clean(repo.SSHKeyPath)
+		if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
+			return nil, fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
+		}
 		cmd.Env = append(os.Environ(),
-			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", repo.SSHKeyPath),
+			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %q -o StrictHostKeyChecking=accept-new", cleanPath),
 		)
 	}
 
@@ -207,8 +216,12 @@ func (m *Manager) Pull(ctx context.Context, name string) (*CloneResult, error) {
 	cmd.Dir = repo.LocalPath
 
 	if repo.SSHKeyPath != "" {
+		cleanPath := filepath.Clean(repo.SSHKeyPath)
+		if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
+			return nil, fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
+		}
 		cmd.Env = append(os.Environ(),
-			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", repo.SSHKeyPath),
+			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %q -o StrictHostKeyChecking=accept-new", cleanPath),
 		)
 	}
 
@@ -339,16 +352,20 @@ func (m *Manager) validateRepository(repo *Repository) error {
 		return fmt.Errorf("%w: name is required", ErrInvalidURL)
 	}
 
+	// Guard against path traversal: name must be a simple identifier
+	if filepath.Base(repo.Name) != repo.Name || strings.ContainsAny(repo.Name, `/\`) {
+		return fmt.Errorf("%w: name must not contain path separators", ErrInvalidURL)
+	}
+
 	if repo.RemoteURL == "" {
 		return fmt.Errorf("%w: remote URL is required", ErrInvalidURL)
 	}
 
 	// Basic URL validation
 	if !strings.HasPrefix(repo.RemoteURL, "https://") &&
-		!strings.HasPrefix(repo.RemoteURL, "http://") &&
 		!strings.HasPrefix(repo.RemoteURL, "git@") &&
 		!strings.HasPrefix(repo.RemoteURL, "ssh://") {
-		return fmt.Errorf("%w: URL must be HTTPS, HTTP, or SSH format", ErrInvalidURL)
+		return fmt.Errorf("%w: URL must be HTTPS or SSH format", ErrInvalidURL)
 	}
 
 	return nil
@@ -385,5 +402,20 @@ func (m *Manager) Register(repo *Repository) error {
 	defer m.mu.Unlock()
 
 	m.repositories[repo.Name] = repo
+	return nil
+}
+
+// safeBranchRe matches valid git branch names: alphanumeric, hyphens, dots,
+// underscores, and slashes. Rejects shell metacharacters and whitespace.
+var safeBranchRe = regexp.MustCompile(`^[a-zA-Z0-9._\-/]+$`)
+
+// validateBranch checks that a branch name contains only safe characters.
+func validateBranch(branch string) error {
+	if branch == "" {
+		return nil
+	}
+	if !safeBranchRe.MatchString(branch) {
+		return fmt.Errorf("%w: branch %q contains invalid characters", ErrInvalidBranch, branch)
+	}
 	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,10 +14,9 @@ import (
 
 // RateLimiter provides configurable rate limiting for API endpoints
 type RateLimiter struct {
-	redis       *redis.Client
-	logger      *zap.Logger
-	config      RateLimitConfig
-	localLimits sync.Map
+	redis  *redis.Client
+	logger *zap.Logger
+	config RateLimitConfig
 }
 
 // RateLimitConfig configures the rate limiter
@@ -204,7 +202,15 @@ func (rl *RateLimiter) getTierLimits(tier string) TierLimits {
 	if limits, ok := rl.config.Tiers[tier]; ok {
 		return limits
 	}
-	return rl.config.Tiers["free"]
+	if limits, ok := rl.config.Tiers["free"]; ok {
+		return limits
+	}
+	return TierLimits{
+		RequestsPerSecond: rl.config.DefaultRequestsPerSecond,
+		RequestsPerMinute: rl.config.DefaultRequestsPerMinute,
+		RequestsPerHour:   rl.config.DefaultRequestsPerMinute * 10,
+		BurstSize:         rl.config.DefaultBurstSize,
+	}
 }
 
 func (rl *RateLimiter) getEndpointLimits(endpoint, method string) *EndpointLimits {
@@ -227,8 +233,8 @@ func (rl *RateLimiter) calculateEffectiveLimits(tier TierLimits, endpoint *Endpo
 		effective.RequestsPerMinute = endpoint.RequestsPerMinute
 	}
 	if endpoint.CostMultiplier > 1 {
-		effective.RequestsPerSecond /= endpoint.CostMultiplier
-		effective.RequestsPerMinute /= endpoint.CostMultiplier
+		effective.RequestsPerSecond = max(1, effective.RequestsPerSecond/endpoint.CostMultiplier)
+		effective.RequestsPerMinute = max(1, effective.RequestsPerMinute/endpoint.CostMultiplier)
 	}
 	return effective
 }
@@ -271,12 +277,7 @@ func (rl *RateLimiter) Middleware(getTier func(r *http.Request) string, getClien
 }
 
 func getClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
+	// Do not trust X-Forwarded-For/X-Real-IP without a configured trusted proxy list.
+	// Fall back to RemoteAddr which is set by the HTTP server from the TCP connection.
 	return r.RemoteAddr
 }
-

@@ -4,6 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -31,7 +36,8 @@ var (
 	BuildTime = "unknown"
 )
 
-// Global managers and state
+// Package-level state: initialized once during main() startup, effectively immutable after init.
+// Safe for concurrent read access from HTTP handlers.
 var (
 	repoManager   *repository.Manager
 	redisClient   *redis.Client
@@ -41,13 +47,14 @@ var (
 )
 
 // Stats holds pipeline statistics.
+// pipelineStats is initialized at startup and fields are accessed via atomic operations. Safe for concurrent use.
 type Stats struct {
-	EventsReceived  atomic.Int64 `json:"events_received"`
-	EventsEnriched  atomic.Int64 `json:"events_enriched"`
-	EventsFailed    atomic.Int64 `json:"events_failed"`
-	CacheHits       atomic.Int64 `json:"cache_hits"`
-	CacheMisses     atomic.Int64 `json:"cache_misses"`
-	ThreatMatches   atomic.Int64 `json:"threat_matches"`
+	EventsReceived atomic.Int64 `json:"events_received"`
+	EventsEnriched atomic.Int64 `json:"events_enriched"`
+	EventsFailed   atomic.Int64 `json:"events_failed"`
+	CacheHits      atomic.Int64 `json:"cache_hits"`
+	CacheMisses    atomic.Int64 `json:"cache_misses"`
+	ThreatMatches  atomic.Int64 `json:"threat_matches"`
 }
 
 func main() {
@@ -76,6 +83,10 @@ func main() {
 		cfg = config.DefaultConfig()
 	}
 
+	// Setup context with cancellation for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Initialize pipeline stats
 	pipelineStats = &Stats{}
 
@@ -86,7 +97,7 @@ func main() {
 		DB:       cfg.Redis.DB,
 		PoolSize: cfg.Redis.PoolSize,
 	})
-	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+	if err := redisClient.Ping(ctx).Err(); err != nil {
 		logger.Printf("Warning: Redis not available: %v (cache disabled)", err)
 		redisClient = nil
 	} else {
@@ -104,10 +115,6 @@ func main() {
 		logger.Printf("Repository manager initialized")
 	}
 
-	// Setup context with cancellation for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -117,7 +124,7 @@ func main() {
 
 	// Middleware
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(securityHeadersMiddleware)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
@@ -126,8 +133,9 @@ func main() {
 	r.Get("/health", handleHealth)
 	r.Get("/ready", handleReady)
 
-	// API routes
+	// API routes (require API key auth)
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(apiKeyAuthMiddleware)
 		// Ingest endpoints
 		r.Post("/ingest", handleIngest)
 		r.Post("/ingest/batch", handleIngestBatch)
@@ -155,20 +163,27 @@ func main() {
 
 	// HEC-compatible endpoints (for Splunk integration)
 	r.Route("/services/collector", func(r chi.Router) {
-		r.Post("/event", handleHECEvent)
-		r.Post("/event/1.0", handleHECEvent)
-		r.Post("/raw", handleHECRaw)
+		// Health endpoints — unauthenticated (must be registered before auth middleware)
 		r.Get("/health", handleHECHealth)
 		r.Get("/health/1.0", handleHECHealth)
+
+		// Authenticated HEC endpoints
+		r.Group(func(r chi.Router) {
+			r.Use(hecAuthMiddleware)
+			r.Post("/event", handleHECEvent)
+			r.Post("/event/1.0", handleHECEvent)
+			r.Post("/raw", handleHECRaw)
+		})
 	})
 
 	// Create server
 	server := &http.Server{
-		Addr:         ":8080",
-		Handler:      r,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:           r,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Start server in goroutine
@@ -184,6 +199,13 @@ func main() {
 	logger.Printf("Received signal: %v, shutting down...", sig)
 	cancel()
 
+	// Stop threat intel provider background goroutines before shutting down the HTTP server.
+	for _, p := range tiProviders {
+		if stopper, ok := p.(interface{ Stop() }); ok {
+			stopper.Stop()
+		}
+	}
+
 	// Graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -193,7 +215,51 @@ func main() {
 	}
 
 	logger.Printf("Server stopped")
-	_ = ctx // silence unused variable warning
+}
+
+// apiKeyAuthMiddleware enforces API key authentication on protected routes.
+// Fail-closed: rejects all requests when THREATFORGE_API_KEY is unset.
+func apiKeyAuthMiddleware(next http.Handler) http.Handler {
+	apiKey := os.Getenv("THREATFORGE_API_KEY")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apiKey == "" {
+			http.Error(w, `{"error":"api key not configured"}`, http.StatusUnauthorized)
+			return
+		}
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(apiKey)) != 1 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hecAuthMiddleware enforces HEC token authentication. Fail-closed when token is unset.
+// Health endpoints are registered outside this middleware group (not matched here).
+func hecAuthMiddleware(next http.Handler) http.Handler {
+	expectedToken := os.Getenv("SPLUNK_HEC_TOKEN_INBOUND")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if expectedToken == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]any{"text": "HEC token not configured", "code": 4})
+			return
+		}
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Splunk ")
+		if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expectedToken)) != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]any{"text": "Invalid token", "code": 4})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// validateRepoName checks a repo name for path traversal. Used by URL param handlers.
+func validateRepoName(name string) bool {
+	return name != "" && filepath.Base(name) == name && !strings.ContainsAny(name, `/\`)
 }
 
 // Health and readiness handlers
@@ -201,7 +267,7 @@ func main() {
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"healthy","version":"` + Version + `"}`))
+	json.NewEncoder(w).Encode(map[string]string{"status": "healthy", "version": Version})
 }
 
 func handleReady(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +282,7 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 	// Check Redis connectivity
 	if redisClient != nil {
 		if err := redisClient.Ping(r.Context()).Err(); err != nil {
-			status["redis_error"] = err.Error()
+			status["redis"] = false
 			status["status"] = "degraded"
 		}
 	}
@@ -224,13 +290,28 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 	// Check providers health
 	for _, p := range tiProviders {
 		if err := p.HealthCheck(r.Context()); err != nil {
-			status[p.Name()+"_error"] = err.Error()
+			status[p.Name()+"_status"] = "unavailable"
 			status["status"] = "degraded"
 		}
 	}
 
-	w.WriteHeader(http.StatusOK)
+	statusCode := http.StatusOK
+	if status["status"] == "degraded" {
+		statusCode = http.StatusServiceUnavailable
+	}
+	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(status)
+}
+
+// securityHeadersMiddleware sets standard security response headers.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "0")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Ingest handlers
@@ -245,18 +326,24 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pipelineStats.EventsReceived.Add(1)
+	eventID := pipelineStats.EventsReceived.Add(1)
 
-	// Cache event if Redis available
+	// Queue event if Redis available
 	if redisClient != nil && req.Event != nil {
-		eventJSON, _ := json.Marshal(req.Event)
-		redisClient.LPush(r.Context(), "threatforge:ingest:queue", eventJSON)
+		eventJSON, err := json.Marshal(req.Event)
+		if err != nil {
+			log.Printf("failed to marshal ingest event: %v", err)
+			pipelineStats.EventsFailed.Add(1)
+		} else if err := redisClient.LPush(r.Context(), "threatforge:ingest:queue", eventJSON).Err(); err != nil {
+			log.Printf("redis LPush failed: %v", err)
+			pipelineStats.EventsFailed.Add(1)
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":   "received",
-		"event_id": fmt.Sprintf("evt-%d", pipelineStats.EventsReceived.Load()),
+		"event_id": fmt.Sprintf("evt-%d", eventID),
 	})
 }
 
@@ -270,18 +357,37 @@ func handleIngestBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const maxBatchSize = 1000
+	if len(events) > maxBatchSize {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("batch size %d exceeds maximum %d", len(events), maxBatchSize),
+		})
+		return
+	}
+
 	count := len(events)
-	pipelineStats.EventsReceived.Add(int64(count))
 
 	// Queue events if Redis available
 	if redisClient != nil && count > 0 {
 		pipe := redisClient.Pipeline()
 		for _, evt := range events {
-			eventJSON, _ := json.Marshal(evt.Event)
+			eventJSON, err := json.Marshal(evt.Event)
+			if err != nil {
+				log.Printf("failed to marshal event: %v", err)
+				continue
+			}
 			pipe.LPush(r.Context(), "threatforge:ingest:queue", eventJSON)
 		}
-		pipe.Exec(r.Context())
+		if _, err := pipe.Exec(r.Context()); err != nil {
+			log.Printf("redis pipeline failed: %v", err)
+			http.Error(w, `{"error":"internal queue failure"}`, http.StatusInternalServerError)
+			return
+		}
 	}
+
+	// Increment counter AFTER pipeline succeeds to avoid double-counting on retry
+	pipelineStats.EventsReceived.Add(int64(count))
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{
@@ -349,7 +455,17 @@ func handleEnrichIOC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	iocType := enrichment.IOCType(req.Type)
-	cacheKey := fmt.Sprintf("ioc:%s:%s", req.Type, req.Value)
+	switch iocType {
+	case enrichment.IOCTypeIP, enrichment.IOCTypeDomain, enrichment.IOCTypeURL,
+		enrichment.IOCTypeHash, enrichment.IOCTypeEmail, enrichment.IOCTypeFile:
+		// valid
+	default:
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "unsupported IOC type"})
+		return
+	}
+	valueHash := sha256.Sum256([]byte(req.Value))
+	cacheKey := fmt.Sprintf("ioc:%s:%s", req.Type, hex.EncodeToString(valueHash[:]))
 
 	// Check cache first
 	if redisClient != nil {
@@ -383,8 +499,11 @@ func handleEnrichIOC(w http.ResponseWriter, r *http.Request) {
 
 	// Cache result
 	if redisClient != nil {
-		resultJSON, _ := json.Marshal(result)
-		redisClient.Set(r.Context(), cacheKey, resultJSON, cfg.Redis.CacheTTL)
+		if resultJSON, err := json.Marshal(result); err != nil {
+			log.Printf("failed to marshal IOC cache result: %v", err)
+		} else if err := redisClient.Set(r.Context(), cacheKey, resultJSON, cfg.Redis.CacheTTL).Err(); err != nil {
+			log.Printf("redis IOC cache write failed: %v", err)
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -394,17 +513,65 @@ func handleEnrichIOC(w http.ResponseWriter, r *http.Request) {
 // Detection handlers
 
 func handleListRules(w http.ResponseWriter, r *http.Request) {
-	// TODO: List loaded detection rules
 	w.Header().Set("Content-Type", "application/json")
+
+	rules := loadRulesFromDisk()
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"rules":[],"count":0}`))
+	json.NewEncoder(w).Encode(map[string]any{
+		"rules": rules,
+		"count": len(rules),
+	})
 }
 
 func handleReloadRules(w http.ResponseWriter, r *http.Request) {
-	// TODO: Reload detection rules from disk
 	w.Header().Set("Content-Type", "application/json")
+
+	rules := loadRulesFromDisk()
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"reloaded"}`))
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "reloaded",
+		"count":   len(rules),
+		"sources": []string{cfg.Detection.SigmaRulesPath, cfg.Detection.CustomRulesPath},
+	})
+}
+
+// ruleFile describes a detection rule file on disk.
+type ruleFile struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Source string `json:"source"` // "sigma" or "custom"
+}
+
+// loadRulesFromDisk scans configured rule directories and returns metadata for
+// each .yml/.yaml rule file found.
+func loadRulesFromDisk() []ruleFile {
+	var rules []ruleFile
+	rules = append(rules, scanRuleDir(cfg.Detection.SigmaRulesPath, "sigma")...)
+	rules = append(rules, scanRuleDir(cfg.Detection.CustomRulesPath, "custom")...)
+	return rules
+}
+
+func scanRuleDir(dir, source string) []ruleFile {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var files []ruleFile
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".yml") && !strings.HasSuffix(name, ".yaml") {
+			continue
+		}
+		files = append(files, ruleFile{
+			Name:   name,
+			Path:   dir + "/" + name,
+			Source: source,
+		})
+	}
+	return files
 }
 
 // Stats handler
@@ -439,15 +606,6 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Validate HEC token
-	authHeader := r.Header.Get("Authorization")
-	expectedToken := os.Getenv("SPLUNK_HEC_TOKEN_INBOUND")
-	if expectedToken != "" && authHeader != "Splunk "+expectedToken {
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]any{"text": "Invalid token", "code": 4})
-		return
-	}
-
 	// Parse HEC event format
 	var events []map[string]any
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 10<<20))
@@ -467,10 +625,18 @@ func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 	if redisClient != nil {
 		pipe := redisClient.Pipeline()
 		for _, evt := range events {
-			eventJSON, _ := json.Marshal(evt)
+			eventJSON, err := json.Marshal(evt)
+			if err != nil {
+				log.Printf("failed to marshal HEC event: %v", err)
+				continue
+			}
 			pipe.LPush(r.Context(), "threatforge:hec:queue", eventJSON)
 		}
-		pipe.Exec(r.Context())
+		if _, err := pipe.Exec(r.Context()); err != nil {
+			log.Printf("redis HEC pipeline failed: %v", err)
+			http.Error(w, `{"error":"internal queue failure"}`, http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -479,15 +645,6 @@ func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 
 func handleHECRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
-	// Validate HEC token
-	authHeader := r.Header.Get("Authorization")
-	expectedToken := os.Getenv("SPLUNK_HEC_TOKEN_INBOUND")
-	if expectedToken != "" && authHeader != "Splunk "+expectedToken {
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]any{"text": "Invalid token", "code": 4})
-		return
-	}
 
 	// Read raw data
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
@@ -501,7 +658,10 @@ func handleHECRaw(w http.ResponseWriter, r *http.Request) {
 
 	// Queue raw event
 	if redisClient != nil {
-		redisClient.LPush(r.Context(), "threatforge:hec:raw", body)
+		if err := redisClient.LPush(r.Context(), "threatforge:hec:raw", body).Err(); err != nil {
+			log.Printf("redis HEC raw push failed: %v", err)
+			pipelineStats.EventsFailed.Add(1)
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -518,11 +678,10 @@ func handleHECHealth(w http.ResponseWriter, r *http.Request) {
 
 // CloneRequest represents a request to clone a repository.
 type CloneRequest struct {
-	Name       string `json:"name"`
-	RemoteURL  string `json:"remote_url"`
-	Branch     string `json:"branch,omitempty"`
-	Depth      int    `json:"depth,omitempty"`
-	SSHKeyPath string `json:"ssh_key_path,omitempty"`
+	Name      string `json:"name"`
+	RemoteURL string `json:"remote_url"`
+	Branch    string `json:"branch,omitempty"`
+	Depth     int    `json:"depth,omitempty"`
 }
 
 func handleListRepos(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +713,7 @@ func handleCloneRepo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CloneRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
 		return
@@ -567,25 +726,27 @@ func handleCloneRepo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repo := &repository.Repository{
-		Name:       req.Name,
-		RemoteURL:  req.RemoteURL,
-		Branch:     req.Branch,
-		Depth:      req.Depth,
-		SSHKeyPath: req.SSHKeyPath,
+		Name:      req.Name,
+		RemoteURL: req.RemoteURL,
+		Branch:    req.Branch,
+		Depth:     req.Depth,
 	}
 
 	result, err := repoManager.Clone(r.Context(), repo)
 	if err != nil {
+		log.Printf("clone failed for %q: %v", req.Name, err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":  err.Error(),
-			"result": result,
-		})
+		json.NewEncoder(w).Encode(map[string]string{"error": "clone failed"})
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(map[string]any{
+		"success":     result.Success,
+		"commit_hash": result.CommitHash,
+		"cloned_at":   result.ClonedAt,
+		"duration_ms": result.Duration.Milliseconds(),
+	})
 }
 
 func handleGetRepoStatus(w http.ResponseWriter, r *http.Request) {
@@ -598,10 +759,16 @@ func handleGetRepoStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := chi.URLParam(r, "name")
+	if !validateRepoName(name) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid repository name"})
+		return
+	}
 	status, err := repoManager.Status(r.Context(), name)
 	if err != nil {
+		log.Printf("repo status failed for %q: %v", name, err)
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository not found"})
 		return
 	}
 
@@ -619,18 +786,25 @@ func handleSyncRepo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := chi.URLParam(r, "name")
+	if !validateRepoName(name) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid repository name"})
+		return
+	}
 	result, err := repoManager.Pull(r.Context(), name)
 	if err != nil {
+		log.Printf("sync failed for %q: %v", name, err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":  err.Error(),
-			"result": result,
-		})
+		json.NewEncoder(w).Encode(map[string]string{"error": "sync failed"})
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(map[string]any{
+		"success":     result.Success,
+		"commit_hash": result.CommitHash,
+		"duration_ms": result.Duration.Milliseconds(),
+	})
 }
 
 func handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
@@ -643,13 +817,19 @@ func handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := chi.URLParam(r, "name")
+	if !validateRepoName(name) {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid repository name"})
+		return
+	}
 
 	// Check for deleteFiles query param
 	deleteFiles := r.URL.Query().Get("delete_files") == "true"
 
 	if err := repoManager.Remove(name, deleteFiles); err != nil {
+		log.Printf("repo remove failed for %q: %v", name, err)
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		json.NewEncoder(w).Encode(map[string]string{"error": "repository not found"})
 		return
 	}
 
@@ -700,6 +880,20 @@ func initThreatIntelProviders(cfg *config.Config, logger *log.Logger) []enrichme
 		}
 	}
 
+	if cfg.ThreatIntel.VirusTotal.Enabled {
+		vt, err := enrichment.NewVirusTotalProvider(
+			cfg.ThreatIntel.VirusTotal.APIKeyEnv,
+			cfg.ThreatIntel.VirusTotal.Timeout,
+			cfg.ThreatIntel.VirusTotal.RateLimit,
+		)
+		if err != nil {
+			logger.Printf("Warning: VirusTotal provider init failed: %v", err)
+		} else {
+			providers = append(providers, vt)
+			logger.Printf("VirusTotal provider initialized")
+		}
+	}
+
 	logger.Printf("Threat intel providers initialized: %d", len(providers))
 	return providers
 }
@@ -719,7 +913,7 @@ type EnrichRequest struct {
 
 // IOCRequest represents an IOC lookup request.
 type IOCRequest struct {
-	Type  string `json:"type"`  // ip, domain, url, hash
+	Type  string `json:"type"` // ip, domain, url, hash
 	Value string `json:"value"`
 }
 
@@ -796,4 +990,3 @@ func calculateConfidence(matches []enrichment.Match) float64 {
 	}
 	return total / float64(len(matches))
 }
-

@@ -295,4 +295,3 @@ func (c *Config) EnabledProviders() []string {
 	}
 	return providers
 }
-

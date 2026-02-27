@@ -13,7 +13,7 @@ type Action struct {
 	ID          string                 `json:"id"`
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
-	Provider    string                 `json:"provider"`   // aws, azure, gcp
+	Provider    string                 `json:"provider"`    // aws, azure, gcp
 	ActionType  string                 `json:"action_type"` // isolate, revoke, block, quarantine
 	Parameters  map[string]interface{} `json:"parameters"`
 	Reversible  bool                   `json:"reversible"`
@@ -22,25 +22,25 @@ type Action struct {
 
 // RemediationRequest represents a request to remediate a finding
 type RemediationRequest struct {
-	ID           string    `json:"id"`
-	FindingID    string    `json:"finding_id"`
-	FindingType  string    `json:"finding_type"`
-	Action       Action    `json:"action"`
-	RequestedBy  string    `json:"requested_by"`
-	RequestedAt  time.Time `json:"requested_at"`
-	RequiresApproval bool  `json:"requires_approval"`
-	ApprovalStatus   string `json:"approval_status"` // pending, approved, rejected
-	ApprovedBy       string `json:"approved_by,omitempty"`
+	ID               string    `json:"id"`
+	FindingID        string    `json:"finding_id"`
+	FindingType      string    `json:"finding_type"`
+	Action           Action    `json:"action"`
+	RequestedBy      string    `json:"requested_by"`
+	RequestedAt      time.Time `json:"requested_at"`
+	RequiresApproval bool      `json:"requires_approval"`
+	ApprovalStatus   string    `json:"approval_status"` // pending, approved, rejected
+	ApprovedBy       string    `json:"approved_by,omitempty"`
 }
 
 // RemediationResult represents the outcome of a remediation action
 type RemediationResult struct {
-	RequestID    string    `json:"request_id"`
-	Status       string    `json:"status"`    // success, failed, rolled_back
-	ExecutedAt   time.Time `json:"executed_at"`
-	Message      string    `json:"message"`
-	RollbackID   string    `json:"rollback_id,omitempty"`
-	AuditTrail   []AuditEntry `json:"audit_trail"`
+	RequestID  string       `json:"request_id"`
+	Status     string       `json:"status"` // success, failed, rolled_back
+	ExecutedAt time.Time    `json:"executed_at"`
+	Message    string       `json:"message"`
+	RollbackID string       `json:"rollback_id,omitempty"`
+	AuditTrail []AuditEntry `json:"audit_trail"`
 }
 
 // AuditEntry represents an entry in the remediation audit trail

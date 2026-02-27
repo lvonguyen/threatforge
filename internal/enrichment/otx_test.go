@@ -1065,8 +1065,8 @@ func TestDetectHashType(t *testing.T) {
 		hash     string
 		expected string
 	}{
-		{"d41d8cd98f00b204e9800998ecf8427e", "MD5"},               // 32 chars
-		{"da39a3ee5e6b4b0d3255bfef95601890afd80709", "SHA1"},      // 40 chars
+		{"d41d8cd98f00b204e9800998ecf8427e", "MD5"},                                    // 32 chars
+		{"da39a3ee5e6b4b0d3255bfef95601890afd80709", "SHA1"},                           // 40 chars
 		{"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "SHA256"}, // 64 chars
 		{"tooshort", ""},
 		{"", ""},

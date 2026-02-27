@@ -24,14 +24,14 @@ type AttackFramework struct {
 
 // Technique represents a MITRE ATT&CK technique
 type Technique struct {
-	ID          string   `json:"id"`           // e.g., "T1059"
-	Name        string   `json:"name"`         // e.g., "Command and Scripting Interpreter"
-	Description string   `json:"description"`
-	Tactics     []string `json:"tactics"`      // e.g., ["execution"]
-	Platforms   []string `json:"platforms"`    // e.g., ["Windows", "Linux", "macOS"]
-	Detection   string   `json:"detection"`
-	Mitigations []string `json:"mitigations"`
-	URL         string   `json:"url"`
+	ID            string         `json:"id"`   // e.g., "T1059"
+	Name          string         `json:"name"` // e.g., "Command and Scripting Interpreter"
+	Description   string         `json:"description"`
+	Tactics       []string       `json:"tactics"`   // e.g., ["execution"]
+	Platforms     []string       `json:"platforms"` // e.g., ["Windows", "Linux", "macOS"]
+	Detection     string         `json:"detection"`
+	Mitigations   []string       `json:"mitigations"`
+	URL           string         `json:"url"`
 	SubTechniques []SubTechnique `json:"sub_techniques,omitempty"`
 }
 
@@ -44,9 +44,9 @@ type SubTechnique struct {
 
 // Tactic represents a MITRE ATT&CK tactic
 type Tactic struct {
-	ID          string `json:"id"`          // e.g., "TA0002"
-	Name        string `json:"name"`        // e.g., "Execution"
-	ShortName   string `json:"short_name"`  // e.g., "execution"
+	ID          string `json:"id"`         // e.g., "TA0002"
+	Name        string `json:"name"`       // e.g., "Execution"
+	ShortName   string `json:"short_name"` // e.g., "execution"
 	Description string `json:"description"`
 	URL         string `json:"url"`
 }
@@ -435,4 +435,3 @@ func (af *AttackFramework) initializeTactics() {
 func ExportMappingsToJSON(mappings []Mapping) ([]byte, error) {
 	return json.MarshalIndent(mappings, "", "  ")
 }
-

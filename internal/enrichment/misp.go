@@ -417,19 +417,11 @@ func toMISPTypes(iocType IOCType) []string {
 		return []string{"md5", "sha1", "sha256"}
 	case IOCTypeEmail:
 		return []string{"email-src", "email-dst"}
+	case IOCTypeFile:
+		return []string{"filename"}
 	default:
 		return nil
 	}
-}
-
-// toMISPType returns the MISP type for single-value lookups. For multi-type
-// IOC kinds (ip, hash, email) it returns the primary type only.
-func toMISPType(iocType IOCType) string {
-	types := toMISPTypes(iocType)
-	if len(types) == 0 {
-		return ""
-	}
-	return types[0]
 }
 
 func categoryToThreatType(category string) ThreatType {

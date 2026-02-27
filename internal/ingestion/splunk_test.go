@@ -394,8 +394,8 @@ func TestRateLimiting_RejectsExcessRequests(t *testing.T) {
 		TokenEnv:     "TEST_HEC_TOKEN",
 		MaxEventSize: 1024 * 1024,
 		MaxBatchSize: 1000,
-		RateLimit:    1,  // 1 request per second
-		RateBurst:    1,  // No burst allowed
+		RateLimit:    1, // 1 request per second
+		RateBurst:    1, // No burst allowed
 	}
 	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {
 		return nil
@@ -440,8 +440,8 @@ func TestRateLimiting_BurstAllowed(t *testing.T) {
 		TokenEnv:     "TEST_HEC_TOKEN",
 		MaxEventSize: 1024 * 1024,
 		MaxBatchSize: 1000,
-		RateLimit:    1,   // 1 request per second sustained
-		RateBurst:    10,  // Allow burst of 10
+		RateLimit:    1,  // 1 request per second sustained
+		RateBurst:    10, // Allow burst of 10
 	}
 	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {
 		return nil
@@ -488,7 +488,7 @@ func TestRateLimiting_DisabledWhenZero(t *testing.T) {
 		TokenEnv:     "TEST_HEC_TOKEN",
 		MaxEventSize: 1024 * 1024,
 		MaxBatchSize: 1000,
-		RateLimit:    0,  // Disabled
+		RateLimit:    0, // Disabled
 		RateBurst:    0,
 	}
 	receiver := NewHECReceiver(config, func(ctx context.Context, events []HECEvent) error {

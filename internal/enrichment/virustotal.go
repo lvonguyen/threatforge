@@ -214,6 +214,8 @@ func vtEndpoint(iocType IOCType, value string) (string, error) {
 		return vtBaseURL + "/urls/" + id, nil
 	case IOCTypeHash:
 		return vtBaseURL + "/files/" + url.PathEscape(value), nil
+	case IOCTypeEmail, IOCTypeFile:
+		return "", fmt.Errorf("unsupported IOC type for VT: %s", iocType)
 	default:
 		return "", fmt.Errorf("unsupported IOC type for VT: %s", iocType)
 	}

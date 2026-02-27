@@ -30,13 +30,13 @@ type RawEvent struct {
 
 // CollectorConfig holds configuration for a collector
 type CollectorConfig struct {
-	Name       string            `yaml:"name"`
-	Type       string            `yaml:"type"`
-	Enabled    bool              `yaml:"enabled"`
-	APIURL     string            `yaml:"api_url"`
-	AuthType   string            `yaml:"auth_type"` // api_key, oauth, basic
-	Credentials map[string]string `yaml:"credentials"`
-	PollInterval time.Duration   `yaml:"poll_interval"`
+	Name         string            `yaml:"name"`
+	Type         string            `yaml:"type"`
+	Enabled      bool              `yaml:"enabled"`
+	APIURL       string            `yaml:"api_url"`
+	AuthType     string            `yaml:"auth_type"` // api_key, oauth, basic
+	Credentials  map[string]string `yaml:"credentials"`
+	PollInterval time.Duration     `yaml:"poll_interval"`
 }
 
 // CrowdStrikeCollector collects events from CrowdStrike Falcon

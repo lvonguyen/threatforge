@@ -398,6 +398,8 @@ func (p *OTXProvider) buildIndicatorPath(iocType IOCType, value string) (string,
 			return "", fmt.Errorf("unknown hash type for value: %s", value)
 		}
 		return fmt.Sprintf("/indicators/file/%s/%s/general", hashType, encodedValue), nil
+	case IOCTypeEmail, IOCTypeFile:
+		return "", fmt.Errorf("unsupported IOC type for OTX: %s", iocType)
 	default:
 		return "", fmt.Errorf("unsupported IOC type: %s", iocType)
 	}
@@ -441,13 +443,13 @@ func (p *OTXProvider) updateRateLimit(resp *http.Response) {
 	// OTX uses X-RateLimit-* headers
 	if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining != "" {
 		var r int
-		fmt.Sscanf(remaining, "%d", &r)
+		_, _ = fmt.Sscanf(remaining, "%d", &r)
 		p.rateLimit.Remaining = r
 	}
 
 	if limit := resp.Header.Get("X-RateLimit-Limit"); limit != "" {
 		var l int
-		fmt.Sscanf(limit, "%d", &l)
+		_, _ = fmt.Sscanf(limit, "%d", &l)
 		p.rateLimit.Limit = l
 	}
 }

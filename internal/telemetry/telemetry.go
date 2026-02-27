@@ -11,24 +11,24 @@ import (
 
 // Event represents a normalized security event
 type Event struct {
-	ID           string                 `json:"id"`
-	Timestamp    time.Time              `json:"timestamp"`
-	Source       string                 `json:"source"`       // crowdstrike, sentinelone, defender, splunk, etc.
-	EventType    string                 `json:"event_type"`   // process, network, file, auth, etc.
-	Severity     int                    `json:"severity"`     // 0-100 normalized
-	RiskScore    float64                `json:"risk_score"`   // AI-powered risk score
-	MITRETactics []string               `json:"mitre_tactics"`
-	MITRETechniques []string            `json:"mitre_techniques"`
-	Entities     []Entity               `json:"entities"`
-	Raw          map[string]interface{} `json:"raw"`
-	Enrichments  *Enrichments           `json:"enrichments,omitempty"`
+	ID              string                 `json:"id"`
+	Timestamp       time.Time              `json:"timestamp"`
+	Source          string                 `json:"source"`     // crowdstrike, sentinelone, defender, splunk, etc.
+	EventType       string                 `json:"event_type"` // process, network, file, auth, etc.
+	Severity        int                    `json:"severity"`   // 0-100 normalized
+	RiskScore       float64                `json:"risk_score"` // AI-powered risk score
+	MITRETactics    []string               `json:"mitre_tactics"`
+	MITRETechniques []string               `json:"mitre_techniques"`
+	Entities        []Entity               `json:"entities"`
+	Raw             map[string]interface{} `json:"raw"`
+	Enrichments     *Enrichments           `json:"enrichments,omitempty"`
 }
 
 // Entity represents an entity involved in the event
 type Entity struct {
-	Type  string `json:"type"`  // user, host, ip, file, process
+	Type  string `json:"type"` // user, host, ip, file, process
 	Value string `json:"value"`
-	Role  string `json:"role"`  // actor, target, observer
+	Role  string `json:"role"` // actor, target, observer
 }
 
 // Enrichments contains additional context added during enrichment
@@ -71,11 +71,11 @@ type AssetContext struct {
 
 // GeoContext contains geolocation enrichment
 type GeoContext struct {
-	Country     string  `json:"country"`
-	City        string  `json:"city"`
-	Latitude    float64 `json:"latitude"`
-	Longitude   float64 `json:"longitude"`
-	IsAnonymizer bool   `json:"is_anonymizer"`
+	Country      string  `json:"country"`
+	City         string  `json:"city"`
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	IsAnonymizer bool    `json:"is_anonymizer"`
 }
 
 // Collector ingests events from a specific source
@@ -109,6 +109,6 @@ type EventChain struct {
 	EndTime    time.Time `json:"end_time"`
 	Events     []Event   `json:"events"`
 	RiskScore  float64   `json:"risk_score"`
-	Summary    string    `json:"summary"`    // AI-generated summary
+	Summary    string    `json:"summary"`     // AI-generated summary
 	MITREChain []string  `json:"mitre_chain"` // Ordered MITRE techniques
 }

@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   GO_VERSION: '1.24'
   REGISTRY: ghcr.io
@@ -15,6 +22,7 @@ jobs:
   build:
     name: Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
@@ -50,6 +58,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code
@@ -64,12 +73,13 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@4f986a2a9e72d6aad416feee5fd9b67c6a9f8e83 # v6.5.0
         with:
-          version: latest
+          version: v1.64.0
           args: --timeout=5m
 
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     permissions:
       contents: read
@@ -86,19 +96,19 @@ jobs:
           cache: true
 
       - name: Run Gosec Security Scanner
-        uses: securego/gosec@master
+        uses: securego/gosec@d20468faee1ab279fdc2c0e05ad7e8de744e3d8a # v2.22.1
         with:
           args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
 
       - name: Upload Gosec SARIF
         uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
-        if: always()
+        if: always() && !cancelled() && hashFiles('gosec-results.sarif') != ''
         continue-on-error: true
         with:
           sarif_file: gosec-results.sarif
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@18f2a8596718a4c9e7c03f8bc21b2a7a6a5c73a4 # v0.32.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -117,6 +127,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [build, lint, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -159,5 +170,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

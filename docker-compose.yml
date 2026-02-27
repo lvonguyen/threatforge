@@ -9,8 +9,8 @@ services:
     environment:
       - PORT=8080
       - REDIS_ADDR=redis:6379
-      # [!] Production: set REDIS_PASSWORD via .env or secret manager
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-changeme}
+      - THREATFORGE_API_KEY=${THREATFORGE_API_KEY:-}
       - CONFIG_PATH=/app/configs/config.yaml
       # Threat intel API keys — set via .env (all optional, disabled by default)
       - MISP_API_KEY=${MISP_API_KEY:-}
@@ -24,27 +24,43 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
     restart: unless-stopped
     volumes:
       - ./configs/config.yaml:/app/configs/config.yaml:ro
+    networks:
+      - frontend
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.50"
 
-  # Redis — threat intel cache and session store
+  # Redis — threat intel cache (internal only, no host port)
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     command: >
       redis-server
       --appendonly yes
-      --requirepass ${REDIS_PASSWORD:-}
+      --requirepass ${REDIS_PASSWORD:-changeme}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "$$REDIS_PASSWORD", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.25"
 
   # ---------------------------------------------------------------------------
   # OPTIONAL: Kafka + Zookeeper for full event streaming mode
@@ -75,6 +91,11 @@ services:
   #     KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
   #     # Topics: threatforge.alerts.raw, threatforge.alerts.enriched
   #   restart: unless-stopped
+
+networks:
+  frontend:
+  backend:
+    internal: true
 
 volumes:
   redis_data:

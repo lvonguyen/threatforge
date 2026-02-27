@@ -26,7 +26,7 @@ FROM alpine:3.20
 
 # Security: Run as non-root user
 RUN addgroup -g 1000 threatforge && \
-    adduser -u 1000 -G threatforge -s /bin/sh -D threatforge
+    adduser -u 1000 -G threatforge -s /sbin/nologin -D threatforge
 
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata

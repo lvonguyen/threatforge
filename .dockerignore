@@ -1,0 +1,39 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+bin/
+coverage.out
+coverage.html
+
+# Documentation (not needed in image)
+docs/
+README.md
+CHANGELOG.md
+CLAUDE.md
+LICENSE
+
+# Editor / IDE / Agent configs
+.idea/
+.vscode/
+.agent/
+.claude/
+.continue/
+.cursorrules
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+Dockerfile

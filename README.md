@@ -33,6 +33,13 @@ flowchart TB
         ML["ML Anomaly\nDetector\nBehavioral baselines"]
     end
 
+    subgraph TELEMETRY["TELEMETRY HUB"]
+        style TELEMETRY fill:#7c3aed,stroke:#5b21b6,color:#fff
+        COLLECTORS["Collectors\nCrowdStrike / SentinelOne\nDefender / Splunk / Cloud"]
+        NORMALIZER["Normalizer\nCEF / LEEF / JSON\n→ OCSF / ECS"]
+        CORRELATOR["Correlator\nCross-source event\ncorrelation + attack chains"]
+    end
+
     subgraph THREATINTEL["THREAT INTEL CORRELATION"]
         style THREATINTEL fill:#f59e0b,stroke:#b45309,color:#fff
         MISP["MISP"]
@@ -56,6 +63,13 @@ flowchart TB
         NOTIFY["Slack/Teams\nPagerDuty"]
     end
 
+    subgraph REMEDIATION["AUTO-REMEDIATION"]
+        style REMEDIATION fill:#ef4444,stroke:#7f1d1d,color:#fff
+        RENG["Remediation\nEngine\nWorkflow orchestration"]
+        PLAYBOOKS["IR Playbooks\nMalware / Phishing\nData Breach"]
+        AGENTS["Remediation Agents\nAWS Lambda\nAzure Functions\nGCP Cloud Functions"]
+    end
+
     HEC --> SIGMA
     KAFKA --> SIGMA
     SYSLOG --> SIGMA
@@ -69,9 +83,18 @@ flowchart TB
     SYSLOG --> ML
     PUBSUB --> ML
 
+    HEC --> COLLECTORS
+    KAFKA --> COLLECTORS
+    SYSLOG --> COLLECTORS
+    PUBSUB --> COLLECTORS
+
+    COLLECTORS --> NORMALIZER
+    NORMALIZER --> CORRELATOR
+
     SIGMA --> MISP
     CUSTOM --> MISP
     ML --> MISP
+    CORRELATOR --> MISP
 
     MISP --> CACHE
     OTX --> CACHE
@@ -80,11 +103,19 @@ flowchart TB
     ABUSE --> CACHE
 
     CACHE --> ENRICH
+    CORRELATOR --> ENRICH
 
     ENRICH --> SPLUNK_OUT
     ENRICH --> SOAR
     ENRICH --> SNOW
     ENRICH --> NOTIFY
+
+    SOAR --> RENG
+    ENRICH --> RENG
+
+    RENG --> PLAYBOOKS
+    RENG --> AGENTS
+    PLAYBOOKS --> AGENTS
 ```
 
 ---

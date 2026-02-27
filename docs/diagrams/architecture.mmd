@@ -1,0 +1,100 @@
+%%{init: {'theme': 'base', 'themeVariables': {'fontFamily': 'Georgia'}}}%%
+flowchart TB
+    subgraph INPUT["INPUT SOURCES"]
+        style INPUT fill:#3b82f6,stroke:#1e40af,color:#fff
+        HEC["Splunk HEC\nWebhook"]
+        KAFKA["Kafka\nConsumer"]
+        SYSLOG["Syslog\nRFC 5424"]
+        PUBSUB["Cloud\nPub/Sub"]
+    end
+
+    subgraph DETECTION["DETECTION ENGINE"]
+        style DETECTION fill:#1e40af,stroke:#0f172a,color:#fff
+        SIGMA["Sigma Rule\nEvaluator\n1000+ rules"]
+        CUSTOM["Custom Rule\nEngine\nYARA-L style"]
+        ML["ML Anomaly\nDetector\nBehavioral baselines"]
+    end
+
+    subgraph TELEMETRY["TELEMETRY HUB"]
+        style TELEMETRY fill:#7c3aed,stroke:#5b21b6,color:#fff
+        COLLECTORS["Collectors\nCrowdStrike / SentinelOne\nDefender / Splunk / Cloud"]
+        NORMALIZER["Normalizer\nCEF / LEEF / JSON\n→ OCSF / ECS"]
+        CORRELATOR["Correlator\nCross-source event\ncorrelation + attack chains"]
+    end
+
+    subgraph THREATINTEL["THREAT INTEL CORRELATION"]
+        style THREATINTEL fill:#f59e0b,stroke:#b45309,color:#fff
+        MISP["MISP"]
+        OTX["OTX\nAlienVault"]
+        VT["VirusTotal"]
+        GN["GreyNoise"]
+        ABUSE["AbuseIPDB"]
+        CACHE[("IOC Cache\nRedis")]
+    end
+
+    subgraph ENRICHMENT["ENRICHMENT and SCORING"]
+        style ENRICHMENT fill:#22c55e,stroke:#15803d,color:#fff
+        ENRICH["Alert + Detection Match\n+ Threat Intel Context\n+ Risk Score"]
+    end
+
+    subgraph OUTPUT["OUTPUT DESTINATIONS"]
+        style OUTPUT fill:#ef4444,stroke:#b91c1c,color:#fff
+        SPLUNK_OUT["Splunk HEC\nenriched"]
+        SOAR["SOAR\nPhantom/XSOAR"]
+        SNOW["ServiceNow\nSecOps"]
+        NOTIFY["Slack/Teams\nPagerDuty"]
+    end
+
+    subgraph REMEDIATION["AUTO-REMEDIATION"]
+        style REMEDIATION fill:#ef4444,stroke:#7f1d1d,color:#fff
+        RENG["Remediation\nEngine\nWorkflow orchestration"]
+        PLAYBOOKS["IR Playbooks\nMalware / Phishing\nData Breach"]
+        AGENTS["Remediation Agents\nAWS Lambda\nAzure Functions\nGCP Cloud Functions"]
+    end
+
+    HEC --> SIGMA
+    KAFKA --> SIGMA
+    SYSLOG --> SIGMA
+    PUBSUB --> SIGMA
+    HEC --> CUSTOM
+    KAFKA --> CUSTOM
+    SYSLOG --> CUSTOM
+    PUBSUB --> CUSTOM
+    HEC --> ML
+    KAFKA --> ML
+    SYSLOG --> ML
+    PUBSUB --> ML
+
+    HEC --> COLLECTORS
+    KAFKA --> COLLECTORS
+    SYSLOG --> COLLECTORS
+    PUBSUB --> COLLECTORS
+
+    COLLECTORS --> NORMALIZER
+    NORMALIZER --> CORRELATOR
+
+    SIGMA --> MISP
+    CUSTOM --> MISP
+    ML --> MISP
+    CORRELATOR --> MISP
+
+    MISP --> CACHE
+    OTX --> CACHE
+    VT --> CACHE
+    GN --> CACHE
+    ABUSE --> CACHE
+
+    CACHE --> ENRICH
+    CORRELATOR --> ENRICH
+
+    ENRICH --> SPLUNK_OUT
+    ENRICH --> SOAR
+    ENRICH --> SNOW
+    ENRICH --> NOTIFY
+
+    SOAR --> RENG
+    ENRICH --> RENG
+
+    RENG --> PLAYBOOKS
+    RENG --> AGENTS
+    PLAYBOOKS --> AGENTS

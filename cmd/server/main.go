@@ -23,10 +23,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/lvonguyen/threatforge/internal/api/gateway"
 	"github.com/lvonguyen/threatforge/internal/config"
 	"github.com/lvonguyen/threatforge/internal/enrichment"
 	"github.com/lvonguyen/threatforge/internal/repository"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // Version information (injected at build time via ldflags)
@@ -122,6 +124,26 @@ func main() {
 	// Setup router
 	r := chi.NewRouter()
 
+	// Wire rate limiter middleware on the API routes.
+	// Falls back to no-op (allow all) when Redis is unavailable.
+	var rateLimitMiddleware func(http.Handler) http.Handler
+	if redisClient != nil {
+		zapLogger, _ := zap.NewProduction()
+		rl := gateway.NewRateLimiter(redisClient, gateway.RateLimitConfig{
+			DefaultRequestsPerSecond: 10,
+			DefaultRequestsPerMinute: 100,
+			DefaultBurstSize:         20,
+			Tiers:                    gateway.DefaultTiers(),
+			Endpoints:                gateway.DefaultEndpointLimits(),
+			IncludeHeaders:           true,
+		}, zapLogger)
+		getTier := func(r *http.Request) string { return "free" }
+		getClientID := func(r *http.Request) string { return r.Header.Get("X-API-Client-ID") }
+		rateLimitMiddleware = rl.Middleware(getTier, getClientID)
+	} else {
+		rateLimitMiddleware = func(next http.Handler) http.Handler { return next }
+	}
+
 	// Middleware
 	r.Use(middleware.RequestID)
 	r.Use(securityHeadersMiddleware)
@@ -136,6 +158,7 @@ func main() {
 	// API routes (require API key auth)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(apiKeyAuthMiddleware)
+		r.Use(rateLimitMiddleware)
 		// Ingest endpoints
 		r.Post("/ingest", handleIngest)
 		r.Post("/ingest/batch", handleIngestBatch)
@@ -603,13 +626,23 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 
 // HEC-compatible handlers
 
+const maxHECBatchSize = 1000
+
 func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Parse HEC event format
+	// Parse HEC event format (newline-delimited JSON objects)
 	var events []map[string]any
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 10<<20))
 	for decoder.More() {
+		if len(events) >= maxHECBatchSize {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			json.NewEncoder(w).Encode(map[string]any{
+				"text": fmt.Sprintf("batch size exceeds maximum %d", maxHECBatchSize),
+				"code": 7,
+			})
+			return
+		}
 		var evt map[string]any
 		if err := decoder.Decode(&evt); err != nil {
 			w.WriteHeader(http.StatusBadRequest)

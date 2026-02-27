@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -245,6 +246,11 @@ func (p *OTXProvider) GetIndicators(ctx context.Context, iocType IOCType, since 
 		return nil, fmt.Errorf("decoding OTX response: %w", err)
 	}
 
+	// Warn if additional pages exist that were not fetched.
+	if pulseResp.Next != "" {
+		log.Printf("[otx] GetIndicators: results truncated at limit=%d; more pages available (next=%q). Increase PulseLimit to fetch all.", p.config.PulseLimit, pulseResp.Next)
+	}
+
 	// Extract indicators matching the requested type
 	var indicators []Indicator
 	for _, pulse := range pulseResp.Results {
@@ -271,7 +277,11 @@ func (p *OTXProvider) CheckIOC(ctx context.Context, iocType IOCType, value strin
 		return match, nil
 	}
 
-	// Singleflight: coalesce concurrent requests for the same IOC
+	// Singleflight: coalesce concurrent requests for the same IOC.
+	// Use context.Background() for the HTTP request inside the flight so that
+	// a cancelled caller context does not abort an in-flight request shared by
+	// other callers (stale-context bug). The outer ctx is still checked for the
+	// cache fast-path.
 	type sfResult struct {
 		match *Match
 	}
@@ -290,7 +300,9 @@ func (p *OTXProvider) CheckIOC(ctx context.Context, iocType IOCType, value strin
 			return &sfResult{match: nil}, nil // Unsupported type
 		}
 
-		req, err := p.newRequest(ctx, "GET", path, nil)
+		// Use a detached context so that a cancelled caller does not abort a
+		// shared in-flight request that other concurrent callers depend on.
+		req, err := p.newRequest(context.Background(), "GET", path, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating check request: %w", err)
 		}

@@ -8,34 +8,36 @@ import (
 	"time"
 )
 
-// IOCType represents indicator of compromise types
-type IOCType string
+// FindingType represents indicator of compromise types for compliance findings.
+// Note: the enrichment package defines its own IOCType with different value semantics
+// (e.g. "hash" vs "file_hash"). Keep these two type spaces separate.
+type FindingType string
 
 const (
-	IOCTypeIP         IOCType = "ip"
-	IOCTypeDomain     IOCType = "domain"
-	IOCTypeURL        IOCType = "url"
-	IOCTypeFileHash   IOCType = "file_hash"
-	IOCTypeEmail      IOCType = "email"
-	IOCTypeCVE        IOCType = "cve"
-	IOCTypeMalware    IOCType = "malware"
-	IOCTypeActor      IOCType = "threat_actor"
-	IOCTypeCampaign   IOCType = "campaign"
-	IOCTypeTool       IOCType = "tool"
-	IOCTypeAttackPattern IOCType = "attack_pattern"
+	FindingTypeIP            FindingType = "ip"
+	FindingTypeDomain        FindingType = "domain"
+	FindingTypeURL           FindingType = "url"
+	FindingTypeFileHash      FindingType = "file_hash"
+	FindingTypeEmail         FindingType = "email"
+	FindingTypeCVE           FindingType = "cve"
+	FindingTypeMalware       FindingType = "malware"
+	FindingTypeActor         FindingType = "threat_actor"
+	FindingTypeCampaign      FindingType = "campaign"
+	FindingTypeTool          FindingType = "tool"
+	FindingTypeAttackPattern FindingType = "attack_pattern"
 )
 
 // ThreatCategory categorizes the threat
 type ThreatCategory string
 
 const (
-	CategoryMalware     ThreatCategory = "malware"
-	CategoryRansomware  ThreatCategory = "ransomware"
-	CategoryPhishing    ThreatCategory = "phishing"
-	CategoryAPT         ThreatCategory = "apt"
-	CategoryCybercrime  ThreatCategory = "cybercrime"
-	CategoryHacktivism  ThreatCategory = "hacktivism"
-	CategoryInsider     ThreatCategory = "insider"
+	CategoryMalware    ThreatCategory = "malware"
+	CategoryRansomware ThreatCategory = "ransomware"
+	CategoryPhishing   ThreatCategory = "phishing"
+	CategoryAPT        ThreatCategory = "apt"
+	CategoryCybercrime ThreatCategory = "cybercrime"
+	CategoryHacktivism ThreatCategory = "hacktivism"
+	CategoryInsider    ThreatCategory = "insider"
 )
 
 // ConfidenceLevel represents intel confidence
@@ -52,44 +54,44 @@ const (
 type WorkflowStatus string
 
 const (
-	StatusNew          WorkflowStatus = "new"
-	StatusTriaged      WorkflowStatus = "triaged"
-	StatusAssigned     WorkflowStatus = "assigned"
-	StatusInProgress   WorkflowStatus = "in_progress"
-	StatusActionable   WorkflowStatus = "actionable"
-	StatusRetired      WorkflowStatus = "retired"
+	StatusNew           WorkflowStatus = "new"
+	StatusTriaged       WorkflowStatus = "triaged"
+	StatusAssigned      WorkflowStatus = "assigned"
+	StatusInProgress    WorkflowStatus = "in_progress"
+	StatusActionable    WorkflowStatus = "actionable"
+	StatusRetired       WorkflowStatus = "retired"
 	StatusFalsePositive WorkflowStatus = "false_positive"
 )
 
 // ThreatIntelFinding represents a threat intelligence finding
 type ThreatIntelFinding struct {
 	// Core Identification
-	ID              string     `json:"id"`
-	Source          string     `json:"source"`
-	SourceFindingID string     `json:"source_finding_id"`
-	Type            IOCType    `json:"type"`
+	ID              string         `json:"id"`
+	Source          string         `json:"source"`
+	SourceFindingID string         `json:"source_finding_id"`
+	Type            FindingType    `json:"type"`
 	Category        ThreatCategory `json:"category"`
-	Value           string     `json:"value"`
-	Title           string     `json:"title"`
-	Description     string     `json:"description"`
+	Value           string         `json:"value"`
+	Title           string         `json:"title"`
+	Description     string         `json:"description"`
 
 	// Threat Assessment
-	ThreatLevel      string          `json:"threat_level"`
-	Confidence       ConfidenceLevel `json:"confidence"`
-	AIRiskScore      float64         `json:"ai_risk_score"`
-	AIRiskLevel      string          `json:"ai_risk_level"`
-	AIRiskRationale  string          `json:"ai_risk_rationale"`
+	ThreatLevel     string          `json:"threat_level"`
+	Confidence      ConfidenceLevel `json:"confidence"`
+	AIRiskScore     float64         `json:"ai_risk_score"`
+	AIRiskLevel     string          `json:"ai_risk_level"`
+	AIRiskRationale string          `json:"ai_risk_rationale"`
 
 	// MITRE ATT&CK Mapping
-	MITRETactics     []string `json:"mitre_tactics,omitempty"`
-	MITRETechniques  []string `json:"mitre_techniques,omitempty"`
+	MITRETactics       []string `json:"mitre_tactics,omitempty"`
+	MITRETechniques    []string `json:"mitre_techniques,omitempty"`
 	MITRESubtechniques []string `json:"mitre_subtechniques,omitempty"`
 
 	// Attribution
-	ThreatActors  []string `json:"threat_actors,omitempty"`
-	Campaigns     []string `json:"campaigns,omitempty"`
-	Malware       []string `json:"malware,omitempty"`
-	Tools         []string `json:"tools,omitempty"`
+	ThreatActors []string `json:"threat_actors,omitempty"`
+	Campaigns    []string `json:"campaigns,omitempty"`
+	Malware      []string `json:"malware,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
 
 	// Context
 	TargetSectors   []string `json:"target_sectors,omitempty"`
@@ -97,10 +99,10 @@ type ThreatIntelFinding struct {
 	TargetPlatforms []string `json:"target_platforms,omitempty"`
 
 	// Enrichment
-	RelatedIOCs     []string `json:"related_iocs,omitempty"`
-	RelatedCVEs     []CVEReference `json:"related_cves,omitempty"`
-	GeoLocation     *GeoLocation `json:"geo_location,omitempty"`
-	ASN             *ASNInfo `json:"asn,omitempty"`
+	RelatedIOCs []string       `json:"related_iocs,omitempty"`
+	RelatedCVEs []CVEReference `json:"related_cves,omitempty"`
+	GeoLocation *GeoLocation   `json:"geo_location,omitempty"`
+	ASN         *ASNInfo       `json:"asn,omitempty"`
 
 	// Workflow
 	Status         string         `json:"status"`
@@ -112,18 +114,18 @@ type ThreatIntelFinding struct {
 	Team             string   `json:"team,omitempty"`
 
 	// Timestamps
-	FirstSeenAt  time.Time  `json:"first_seen_at"`
-	LastSeenAt   time.Time  `json:"last_seen_at"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
-	RetiredAt    *time.Time `json:"retired_at,omitempty"`
+	FirstSeenAt time.Time  `json:"first_seen_at"`
+	LastSeenAt  time.Time  `json:"last_seen_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	RetiredAt   *time.Time `json:"retired_at,omitempty"`
 
 	// Deduplication
 	DeduplicationKey string   `json:"deduplication_key"`
 	RelatedFindings  []string `json:"related_findings,omitempty"`
 
 	// Ticketing
-	TicketID     string `json:"ticket_id,omitempty"`
-	TicketURL    string `json:"ticket_url,omitempty"`
+	TicketID  string `json:"ticket_id,omitempty"`
+	TicketURL string `json:"ticket_url,omitempty"`
 
 	// Raw Data
 	RawData map[string]interface{} `json:"raw_data,omitempty"`
@@ -158,12 +160,12 @@ type ASNInfo struct {
 
 // AssigneeInfo represents finding assignment
 type AssigneeInfo struct {
-	UserID     string     `json:"user_id"`
-	UserEmail  string     `json:"user_email"`
-	UserName   string     `json:"user_name"`
-	Team       string     `json:"team"`
-	AssignedAt time.Time  `json:"assigned_at"`
-	AssignedBy string     `json:"assigned_by"`
+	UserID     string    `json:"user_id"`
+	UserEmail  string    `json:"user_email"`
+	UserName   string    `json:"user_name"`
+	Team       string    `json:"team"`
+	AssignedAt time.Time `json:"assigned_at"`
+	AssignedBy string    `json:"assigned_by"`
 }
 
 // Contact represents a contact person
@@ -206,4 +208,3 @@ func (f *ThreatIntelFinding) IsExpired() bool {
 func (f *ThreatIntelFinding) IsHighConfidence() bool {
 	return f.Confidence == ConfidenceHigh
 }
-

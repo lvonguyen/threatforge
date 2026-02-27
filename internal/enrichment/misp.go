@@ -6,6 +6,7 @@ package enrichment
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,11 +58,18 @@ func NewMISPProvider(config MISPConfig) (*MISPProvider, error) {
 		return nil, fmt.Errorf("MISP base URL is required")
 	}
 
+	// Apply VerifySSL setting to the HTTP transport.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if !config.VerifySSL {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // controlled by explicit operator config
+	}
+
 	return &MISPProvider{
 		config: config,
 		apiKey: apiKey,
 		httpClient: &http.Client{
-			Timeout: config.Timeout,
+			Timeout:   config.Timeout,
+			Transport: transport,
 		},
 		rateLimit: RateLimitStatus{
 			Remaining: config.RateLimit,
@@ -105,14 +113,22 @@ func (p *MISPProvider) RateLimit() RateLimitStatus {
 
 // GetIndicators retrieves indicators from MISP.
 func (p *MISPProvider) GetIndicators(ctx context.Context, iocType IOCType, since time.Time) ([]Indicator, error) {
-	mispType := toMISPType(iocType)
-	if mispType == "" {
+	mispTypes := toMISPTypes(iocType)
+	if len(mispTypes) == 0 {
 		return nil, fmt.Errorf("unsupported IOC type for MISP: %s", iocType)
+	}
+
+	// Use []string for multi-type OR queries; single entry degrades to string.
+	var typeVal any
+	if len(mispTypes) == 1 {
+		typeVal = mispTypes[0]
+	} else {
+		typeVal = mispTypes
 	}
 
 	// Build search request
 	searchReq := MISPAttributeSearchRequest{
-		Type:      mispType,
+		Type:      typeVal,
 		Timestamp: since.Unix(),
 		Published: &p.config.PublishedOnly,
 	}
@@ -154,15 +170,22 @@ func (p *MISPProvider) GetIndicators(ctx context.Context, iocType IOCType, since
 
 // CheckIOC checks if a value exists in MISP.
 func (p *MISPProvider) CheckIOC(ctx context.Context, iocType IOCType, value string) (*Match, error) {
-	mispType := toMISPType(iocType)
-	if mispType == "" {
+	mispTypes := toMISPTypes(iocType)
+	if len(mispTypes) == 0 {
 		return nil, nil // Unsupported type
+	}
+
+	var typeVal any
+	if len(mispTypes) == 1 {
+		typeVal = mispTypes[0]
+	} else {
+		typeVal = mispTypes
 	}
 
 	// Search by value
 	searchReq := MISPAttributeSearchRequest{
 		Value:     value,
-		Type:      mispType,
+		Type:      typeVal,
 		Published: &p.config.PublishedOnly,
 	}
 
@@ -211,15 +234,22 @@ func (p *MISPProvider) CheckIOC(ctx context.Context, iocType IOCType, value stri
 // CheckBatch checks multiple IOCs against MISP.
 func (p *MISPProvider) CheckBatch(ctx context.Context, iocType IOCType, values []string) ([]Match, error) {
 	// MISP supports OR queries with multiple values
-	mispType := toMISPType(iocType)
-	if mispType == "" {
+	mispTypes := toMISPTypes(iocType)
+	if len(mispTypes) == 0 {
 		return nil, nil
+	}
+
+	var typeVal any
+	if len(mispTypes) == 1 {
+		typeVal = mispTypes[0]
+	} else {
+		typeVal = mispTypes
 	}
 
 	// Join values for OR search
 	searchReq := MISPAttributeSearchRequest{
 		Value:     strings.Join(values, "||"),
-		Type:      mispType,
+		Type:      typeVal,
 		Published: &p.config.PublishedOnly,
 	}
 
@@ -321,9 +351,10 @@ func (p *MISPProvider) attributeToIndicator(attr MISPAttribute, iocType IOCType)
 // MISP API types
 
 // MISPAttributeSearchRequest is the MISP attribute search request.
+// The Type field accepts a single string or a []string for multi-type OR queries.
 type MISPAttributeSearchRequest struct {
 	Value     string `json:"value,omitempty"`
-	Type      string `json:"type,omitempty"`
+	Type      any    `json:"type,omitempty"` // string or []string for multi-type OR queries
 	Category  string `json:"category,omitempty"`
 	Timestamp int64  `json:"timestamp,omitempty"`
 	Published *bool  `json:"published,omitempty"`
@@ -372,21 +403,33 @@ type MISPEvent struct {
 
 // Helper functions
 
-func toMISPType(iocType IOCType) string {
+// toMISPTypes returns the MISP attribute type(s) for the given IOC type.
+// Returns nil for unsupported types.
+func toMISPTypes(iocType IOCType) []string {
 	switch iocType {
 	case IOCTypeIP:
-		return "ip-src|ip-dst"
+		return []string{"ip-src", "ip-dst"}
 	case IOCTypeDomain:
-		return "domain"
+		return []string{"domain"}
 	case IOCTypeURL:
-		return "url"
+		return []string{"url"}
 	case IOCTypeHash:
-		return "md5|sha1|sha256"
+		return []string{"md5", "sha1", "sha256"}
 	case IOCTypeEmail:
-		return "email-src|email-dst"
+		return []string{"email-src", "email-dst"}
 	default:
+		return nil
+	}
+}
+
+// toMISPType returns the MISP type for single-value lookups. For multi-type
+// IOC kinds (ip, hash, email) it returns the primary type only.
+func toMISPType(iocType IOCType) string {
+	types := toMISPTypes(iocType)
+	if len(types) == 0 {
 		return ""
 	}
+	return types[0]
 }
 
 func categoryToThreatType(category string) ThreatType {

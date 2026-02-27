@@ -4,6 +4,7 @@ package correlation
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/lvonguyen/threatforge/internal/telemetry/normalization"
@@ -11,13 +12,13 @@ import (
 
 // EventChain represents a correlated sequence of events
 type EventChain struct {
-	ID         string                          `json:"id"`
-	StartTime  time.Time                       `json:"start_time"`
-	EndTime    time.Time                       `json:"end_time"`
+	ID         string                           `json:"id"`
+	StartTime  time.Time                        `json:"start_time"`
+	EndTime    time.Time                        `json:"end_time"`
 	Events     []*normalization.NormalizedEvent `json:"events"`
-	RiskScore  float64                         `json:"risk_score"`
-	Summary    string                          `json:"summary"`
-	MITREChain []string                        `json:"mitre_chain"`
+	RiskScore  float64                          `json:"risk_score"`
+	Summary    string                           `json:"summary"`
+	MITREChain []string                         `json:"mitre_chain"`
 }
 
 // CorrelatorConfig holds configuration for the correlator
@@ -94,6 +95,12 @@ func (c *Correlator) buildChain(entity string, events []*normalization.Normalize
 	if len(events) < c.config.MinEventsForChain {
 		return nil
 	}
+
+	// Sort events by timestamp ascending so StartTime/EndTime are correct
+	// regardless of arrival order.
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.Before(events[j].Timestamp)
+	})
 
 	chain := &EventChain{
 		ID:        entity + "-chain",

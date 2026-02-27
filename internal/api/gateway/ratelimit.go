@@ -159,7 +159,12 @@ func (rl *RateLimiter) Check(ctx context.Context, tier, clientID, endpoint, meth
 
 	script := redis.NewScript(`
 		local current = redis.call('INCR', KEYS[1])
-		if current == 1 then
+		local ttl = redis.call('PTTL', KEYS[1])
+		if ttl == -1 then
+			-- Key exists but has no expiry (e.g. created without TTL due to a crash).
+			-- Set the expiry now to avoid a permanently-stuck counter.
+			redis.call('PEXPIRE', KEYS[1], ARGV[1])
+		elseif current == 1 then
 			redis.call('PEXPIRE', KEYS[1], ARGV[1])
 		end
 		return current

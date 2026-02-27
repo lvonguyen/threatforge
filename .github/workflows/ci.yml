@@ -71,7 +71,7 @@ jobs:
           cache: true
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@4f986a2a9e72d6aad416feee5fd9b67c6a9f8e83 # v6.5.0
+        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6.5.2
         with:
           version: v1.64.0
           args: --timeout=5m
@@ -96,7 +96,7 @@ jobs:
           cache: true
 
       - name: Run Gosec Security Scanner
-        uses: securego/gosec@d20468faee1ab279fdc2c0e05ad7e8de744e3d8a # v2.22.1
+        uses: securego/gosec@424fc4cd9c82ea0fd6bee9cd49c2db2c3cc0c93f # v2.22.11
         with:
           args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
 

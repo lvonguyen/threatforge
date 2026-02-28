@@ -317,10 +317,16 @@ func (p *MISPProvider) newRequest(ctx context.Context, method, path string, body
 
 // attributeToIndicator converts a MISP attribute to common format.
 func (p *MISPProvider) attributeToIndicator(attr MISPAttribute, iocType IOCType) Indicator {
-	// Parse timestamps
-	firstSeen := time.Unix(attr.FirstSeen, 0)
-	lastSeen := time.Unix(attr.LastSeen, 0)
-	if attr.LastSeen == 0 {
+	// Parse timestamps. A zero epoch value means "not set" — use time.Time{} so
+	// that IsZero() checks work correctly downstream. time.Unix(0,0) returns
+	// 1970-01-01 which is non-zero and would break those checks.
+	var firstSeen, lastSeen time.Time
+	if attr.FirstSeen != 0 {
+		firstSeen = time.Unix(attr.FirstSeen, 0).UTC()
+	}
+	if attr.LastSeen != 0 {
+		lastSeen = time.Unix(attr.LastSeen, 0).UTC()
+	} else {
 		lastSeen = firstSeen
 	}
 

@@ -34,6 +34,7 @@ type OTXProvider struct {
 	rateLimit   RateLimitStatus
 	mu          sync.RWMutex
 	stopCleanup chan struct{}
+	stopOnce    sync.Once
 }
 
 // OTXConfig holds OTX-specific configuration.
@@ -166,8 +167,9 @@ func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 }
 
 // Stop signals the background cache cleanup goroutine to exit.
+// Safe to call multiple times — subsequent calls are no-ops.
 func (p *OTXProvider) Stop() {
-	close(p.stopCleanup)
+	p.stopOnce.Do(func() { close(p.stopCleanup) })
 }
 
 func (p *OTXProvider) startCacheCleanup() {

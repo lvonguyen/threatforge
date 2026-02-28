@@ -147,8 +147,11 @@ func (m *Manager) Clone(ctx context.Context, repo *Repository) (*CloneResult, er
 		if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
 			return nil, fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
 		}
+		if !safeSSHKeyRe.MatchString(cleanPath) {
+			return nil, fmt.Errorf("invalid SSH key path: contains unsafe characters: %s", cleanPath)
+		}
 		cmd.Env = append(os.Environ(),
-			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %q -o StrictHostKeyChecking=accept-new", cleanPath),
+			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=accept-new", cleanPath),
 		)
 	}
 
@@ -186,6 +189,11 @@ func (m *Manager) Clone(ctx context.Context, repo *Repository) (*CloneResult, er
 
 // CloneOrPull clones a repository if it doesn't exist, or pulls if it does.
 func (m *Manager) CloneOrPull(ctx context.Context, repo *Repository) (*CloneResult, error) {
+	// Validate before any operation — Pull bypasses Clone's validateRepository call.
+	if err := m.validateRepository(repo); err != nil {
+		return nil, err
+	}
+
 	localPath := repo.LocalPath
 	if localPath == "" {
 		localPath = filepath.Join(m.basePath, repo.Name)
@@ -222,8 +230,11 @@ func (m *Manager) Pull(ctx context.Context, name string) (*CloneResult, error) {
 		if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
 			return nil, fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
 		}
+		if !safeSSHKeyRe.MatchString(cleanPath) {
+			return nil, fmt.Errorf("invalid SSH key path: contains unsafe characters: %s", cleanPath)
+		}
 		cmd.Env = append(os.Environ(),
-			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %q -o StrictHostKeyChecking=accept-new", cleanPath),
+			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=accept-new", cleanPath),
 		)
 	}
 
@@ -403,13 +414,19 @@ func (m *Manager) Register(repo *Repository) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.repositories[repo.Name] = repo
+	// Store a copy so caller mutations don't silently alter internal state.
+	copied := *repo
+	m.repositories[repo.Name] = &copied
 	return nil
 }
 
 // safeBranchRe matches valid git branch names: alphanumeric, hyphens, dots,
 // underscores, and slashes. Rejects shell metacharacters and whitespace.
 var safeBranchRe = regexp.MustCompile(`^[a-zA-Z0-9._\-/]+$`)
+
+// safeSSHKeyRe matches SSH key paths containing only safe characters.
+// Prevents shell metacharacter injection even when %q is not used.
+var safeSSHKeyRe = regexp.MustCompile(`^[a-zA-Z0-9/._-]+$`)
 
 // validateBranch checks that a branch name contains only safe characters.
 func validateBranch(branch string) error {

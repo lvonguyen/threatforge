@@ -3,6 +3,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -269,6 +270,12 @@ func (rl *RateLimiter) Middleware(getTier func(r *http.Request) string, getClien
 
 			result, err := rl.Check(ctx, tier, clientID, r.URL.Path, r.Method)
 			if err != nil {
+				if !rl.config.FailOpen {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate_limit_unavailable"})
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}

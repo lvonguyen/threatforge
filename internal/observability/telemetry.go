@@ -3,6 +3,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"runtime"
@@ -419,9 +420,11 @@ func (t *Telemetry) StartSystemMetricsCollector(ctx context.Context) {
 func (t *Telemetry) Shutdown(ctx context.Context) error {
 	var err error
 	t.shutdownOnce.Do(func() {
+		// Collect all shutdown errors so none are silently lost.
+		var errs []error
 		for _, fn := range t.shutdownFns {
 			if e := fn(ctx); e != nil {
-				err = e
+				errs = append(errs, e)
 			}
 		}
 		// Sync flushes any buffered log entries. Errors for ENOTTY/EINVAL are
@@ -430,9 +433,10 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 		if syncErr := t.logger.Sync(); syncErr != nil {
 			msg := syncErr.Error()
 			if !strings.Contains(msg, "invalid argument") && !strings.Contains(msg, "inappropriate ioctl") {
-				err = syncErr
+				errs = append(errs, syncErr)
 			}
 		}
+		err = errors.Join(errs...)
 	})
 	return err
 }

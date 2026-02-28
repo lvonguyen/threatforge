@@ -495,7 +495,7 @@ func (s *HECSender) send(ctx context.Context, data []byte, eventCount int) error
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("HEC returned %d: %s", resp.StatusCode, string(body))
 	}
 

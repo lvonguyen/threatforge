@@ -165,18 +165,20 @@ func (rl *RateLimiter) Check(ctx context.Context, tier, clientID, endpoint, meth
 
 	script := redis.NewScript(`
 		local current = redis.call('INCR', KEYS[1])
-		local ttl = redis.call('PTTL', KEYS[1])
-		if ttl == -1 then
+		local pttl = redis.call('PTTL', KEYS[1])
+		if pttl == -1 then
 			-- Key exists but has no expiry (e.g. created without TTL due to a crash).
 			-- Set the expiry now to avoid a permanently-stuck counter.
 			redis.call('PEXPIRE', KEYS[1], ARGV[1])
+			pttl = tonumber(ARGV[1])
 		elseif current == 1 then
 			redis.call('PEXPIRE', KEYS[1], ARGV[1])
+			pttl = tonumber(ARGV[1])
 		end
-		return current
+		return {current, pttl}
 	`)
 
-	result, err := script.Run(ctx, rl.redis, []string{redisKey}, 60000).Int()
+	res, err := script.Run(ctx, rl.redis, []string{redisKey}, 60000).Int64Slice()
 	if err != nil {
 		if rl.config.FailOpen {
 			rl.logger.Warn("Rate limit check failed (fail-open): allowing request", zap.Error(err))
@@ -190,19 +192,26 @@ func (rl *RateLimiter) Check(ctx context.Context, tier, clientID, endpoint, meth
 		}, nil
 	}
 
+	result := int(res[0])
+	pttlMs := res[1]
+	var windowDuration time.Duration
+	if pttlMs > 0 {
+		windowDuration = time.Duration(pttlMs) * time.Millisecond
+	} else {
+		windowDuration = time.Minute // fallback: full window
+	}
+	resetAt := now.Add(windowDuration)
+
 	allowed := result <= effectiveLimits.RequestsPerMinute
 	remaining := effectiveLimits.RequestsPerMinute - result
 	if remaining < 0 {
 		remaining = 0
 	}
 
-	ttl, _ := rl.redis.TTL(ctx, redisKey).Result()
-	resetAt := now.Add(ttl)
-
 	var retryAfter time.Duration
 	var reason string
 	if !allowed {
-		retryAfter = ttl
+		retryAfter = windowDuration
 		reason = "Rate limit exceeded"
 	}
 

@@ -116,14 +116,14 @@ func (p *VirusTotalProvider) CheckIOC(ctx context.Context, iocType IOCType, valu
 	}
 	defer resp.Body.Close()
 
-	p.trackRate()
-
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return nil, fmt.Errorf("VT rate limit exceeded")
 	}
+
+	p.trackRate()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("VT API error %d: %s", resp.StatusCode, string(body))

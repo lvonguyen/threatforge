@@ -198,7 +198,11 @@ func (m *Manager) CloneOrPull(ctx context.Context, repo *Repository) (*CloneResu
 
 	// Check if repo already exists locally
 	if _, err := os.Stat(filepath.Join(localPath, ".git")); err == nil {
-		// Repository exists, pull instead
+		// Repository exists on disk. Ensure it is registered in the map before
+		// calling Pull (which requires map registration). This handles the case
+		// where the process restarted and the in-memory map was cleared.
+		repo.LocalPath = localPath
+		_ = m.Register(repo) // idempotent: no-op if already registered
 		return m.Pull(ctx, repo.Name)
 	}
 

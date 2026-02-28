@@ -3,7 +3,6 @@ package mitre
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -74,7 +73,7 @@ func NewAttackFramework(logger *zap.Logger) *AttackFramework {
 }
 
 // MapIOC maps an IOC to potential MITRE ATT&CK techniques
-func (af *AttackFramework) MapIOC(ctx context.Context, iocType, iocValue string) ([]Mapping, error) {
+func (af *AttackFramework) MapIOC(_ context.Context, iocType, iocValue string) ([]Mapping, error) {
 	mappings := make([]Mapping, 0)
 
 	switch strings.ToLower(iocType) {
@@ -100,7 +99,7 @@ func (af *AttackFramework) MapIOC(ctx context.Context, iocType, iocValue string)
 }
 
 // MapEvent maps a security event to MITRE ATT&CK techniques
-func (af *AttackFramework) MapEvent(ctx context.Context, eventType string, eventData map[string]interface{}) ([]Mapping, error) {
+func (af *AttackFramework) MapEvent(_ context.Context, eventType string, eventData map[string]interface{}) ([]Mapping, error) {
 	mappings := make([]Mapping, 0)
 
 	// Map based on event type
@@ -425,9 +424,4 @@ func (af *AttackFramework) initializeTactics() {
 		af.tactics[t.ShortName] = t
 		af.tactics[t.ID] = t
 	}
-}
-
-// ExportMappingsToJSON exports mappings to JSON format
-func ExportMappingsToJSON(mappings []Mapping) ([]byte, error) {
-	return json.MarshalIndent(mappings, "", "  ")
 }

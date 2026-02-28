@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -41,6 +40,7 @@ var (
 // Package-level state: initialized once during main() startup, effectively immutable after init.
 // Safe for concurrent read access from HTTP handlers.
 var (
+	logger        *zap.Logger
 	repoManager   *repository.Manager
 	redisClient   *redis.Client
 	cfg           *config.Config
@@ -72,16 +72,17 @@ func main() {
 	}
 
 	// Initialize logger
-	logger := log.New(os.Stdout, "[threatforge] ", log.LstdFlags|log.Lshortfile)
+	logger = zap.Must(zap.NewProduction())
+	defer logger.Sync() //nolint:errcheck
 
-	logger.Printf("Starting ThreatForge %s", Version)
-	logger.Printf("Config: %s", *configPath)
+	logger.Info("Starting ThreatForge", zap.String("version", Version))
+	logger.Info("Config", zap.String("path", *configPath))
 
 	// Load configuration
 	var err error
 	cfg, err = config.Load(*configPath)
 	if err != nil {
-		logger.Printf("Warning: Failed to load config, using defaults: %v", err)
+		logger.Warn("Failed to load config, using defaults", zap.Error(err))
 		cfg = config.DefaultConfig()
 	}
 
@@ -100,10 +101,10 @@ func main() {
 		PoolSize: cfg.Redis.PoolSize,
 	})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Printf("Warning: Redis not available: %v (cache disabled)", err)
+		logger.Warn("Redis not available, cache disabled", zap.Error(err))
 		redisClient = nil
 	} else {
-		logger.Printf("Redis connected: %s", cfg.Redis.Addr)
+		logger.Info("Redis connected", zap.String("addr", cfg.Redis.Addr))
 	}
 
 	// Initialize threat intel providers
@@ -112,9 +113,9 @@ func main() {
 	// Initialize repository manager
 	repoManager, err = repository.NewManager("repositories")
 	if err != nil {
-		logger.Printf("Warning: Repository manager initialization failed: %v", err)
+		logger.Warn("Repository manager initialization failed", zap.Error(err))
 	} else {
-		logger.Printf("Repository manager initialized")
+		logger.Info("Repository manager initialized")
 	}
 
 	// Handle shutdown signals
@@ -128,7 +129,6 @@ func main() {
 	// Falls back to no-op (allow all) when Redis is unavailable.
 	var rateLimitMiddleware func(http.Handler) http.Handler
 	if redisClient != nil {
-		zapLogger := zap.Must(zap.NewProduction())
 		rl := gateway.NewRateLimiter(redisClient, gateway.RateLimitConfig{
 			DefaultRequestsPerSecond: 10,
 			DefaultRequestsPerMinute: 100,
@@ -136,7 +136,7 @@ func main() {
 			Tiers:                    gateway.DefaultTiers(),
 			Endpoints:                gateway.DefaultEndpointLimits(),
 			IncludeHeaders:           true,
-		}, zapLogger)
+		}, logger)
 		getTier := func(r *http.Request) string { return "free" }
 		getClientID := func(r *http.Request) string { return r.Header.Get("X-API-Client-ID") }
 		rateLimitMiddleware = rl.Middleware(getTier, getClientID)
@@ -211,15 +211,15 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		logger.Printf("Server listening on %s", server.Addr)
+		logger.Info("Server listening", zap.String("addr", server.Addr))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("Server error: %v", err)
+			logger.Fatal("Server error", zap.Error(err))
 		}
 	}()
 
 	// Wait for shutdown signal
 	sig := <-sigChan
-	logger.Printf("Received signal: %v, shutting down...", sig)
+	logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 	cancel()
 
 	// Stop threat intel provider background goroutines before shutting down the HTTP server.
@@ -234,10 +234,10 @@ func main() {
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Printf("Shutdown error: %v", err)
+		logger.Error("Shutdown error", zap.Error(err))
 	}
 
-	logger.Printf("Server stopped")
+	logger.Info("Server stopped")
 }
 
 // apiKeyAuthMiddleware enforces API key authentication on protected routes.
@@ -355,10 +355,10 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 	if redisClient != nil && req.Event != nil {
 		eventJSON, err := json.Marshal(req.Event)
 		if err != nil {
-			log.Printf("failed to marshal ingest event: %v", err)
+			logger.Error("failed to marshal ingest event", zap.Error(err))
 			pipelineStats.EventsFailed.Add(1)
 		} else if err := redisClient.LPush(r.Context(), "threatforge:ingest:queue", eventJSON).Err(); err != nil {
-			log.Printf("redis LPush failed: %v", err)
+			logger.Error("redis LPush failed", zap.Error(err))
 			pipelineStats.EventsFailed.Add(1)
 		}
 	}
@@ -397,13 +397,13 @@ func handleIngestBatch(w http.ResponseWriter, r *http.Request) {
 		for _, evt := range events {
 			eventJSON, err := json.Marshal(evt.Event)
 			if err != nil {
-				log.Printf("failed to marshal event: %v", err)
+				logger.Error("failed to marshal event", zap.Error(err))
 				continue
 			}
 			pipe.LPush(r.Context(), "threatforge:ingest:queue", eventJSON)
 		}
 		if _, err := pipe.Exec(r.Context()); err != nil {
-			log.Printf("redis pipeline failed: %v", err)
+			logger.Error("redis pipeline failed", zap.Error(err))
 			http.Error(w, `{"error":"internal queue failure"}`, http.StatusInternalServerError)
 			return
 		}
@@ -523,9 +523,9 @@ func handleEnrichIOC(w http.ResponseWriter, r *http.Request) {
 	// Cache result
 	if redisClient != nil {
 		if resultJSON, err := json.Marshal(result); err != nil {
-			log.Printf("failed to marshal IOC cache result: %v", err)
+			logger.Error("failed to marshal IOC cache result", zap.Error(err))
 		} else if err := redisClient.Set(r.Context(), cacheKey, resultJSON, cfg.Redis.CacheTTL).Err(); err != nil {
-			log.Printf("redis IOC cache write failed: %v", err)
+			logger.Error("redis IOC cache write failed", zap.Error(err))
 		}
 	}
 
@@ -590,7 +590,7 @@ func scanRuleDir(dir, source string) []ruleFile {
 		}
 		files = append(files, ruleFile{
 			Name:   name,
-			Path:   dir + "/" + name,
+			Path:   filepath.Join(dir, name),
 			Source: source,
 		})
 	}
@@ -660,13 +660,13 @@ func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 		for _, evt := range events {
 			eventJSON, err := json.Marshal(evt)
 			if err != nil {
-				log.Printf("failed to marshal HEC event: %v", err)
+				logger.Error("failed to marshal HEC event", zap.Error(err))
 				continue
 			}
 			pipe.LPush(r.Context(), "threatforge:hec:queue", eventJSON)
 		}
 		if _, err := pipe.Exec(r.Context()); err != nil {
-			log.Printf("redis HEC pipeline failed: %v", err)
+			logger.Error("redis HEC pipeline failed", zap.Error(err))
 			http.Error(w, `{"error":"internal queue failure"}`, http.StatusInternalServerError)
 			return
 		}
@@ -692,7 +692,7 @@ func handleHECRaw(w http.ResponseWriter, r *http.Request) {
 	// Queue raw event
 	if redisClient != nil {
 		if err := redisClient.LPush(r.Context(), "threatforge:hec:raw", body).Err(); err != nil {
-			log.Printf("redis HEC raw push failed: %v", err)
+			logger.Error("redis HEC raw push failed", zap.Error(err))
 			pipelineStats.EventsFailed.Add(1)
 		}
 	}
@@ -727,7 +727,7 @@ func handleListRepos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repos := repoManager.List()
-	response := map[string]interface{}{
+	response := map[string]any{
 		"repositories": repos,
 		"count":        len(repos),
 	}
@@ -767,7 +767,7 @@ func handleCloneRepo(w http.ResponseWriter, r *http.Request) {
 
 	result, err := repoManager.Clone(r.Context(), repo)
 	if err != nil {
-		log.Printf("clone failed for %q: %v", req.Name, err)
+		logger.Error("clone failed", zap.String("repo", req.Name), zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": "clone failed"})
 		return
@@ -799,7 +799,7 @@ func handleGetRepoStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := repoManager.Status(r.Context(), name)
 	if err != nil {
-		log.Printf("repo status failed for %q: %v", name, err)
+		logger.Error("repo status failed", zap.String("repo", name), zap.Error(err))
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]string{"error": "repository not found"})
 		return
@@ -826,7 +826,7 @@ func handleSyncRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := repoManager.Pull(r.Context(), name)
 	if err != nil {
-		log.Printf("sync failed for %q: %v", name, err)
+		logger.Error("sync failed", zap.String("repo", name), zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": "sync failed"})
 		return
@@ -860,7 +860,7 @@ func handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 	deleteFiles := r.URL.Query().Get("delete_files") == "true"
 
 	if err := repoManager.Remove(name, deleteFiles); err != nil {
-		log.Printf("repo remove failed for %q: %v", name, err)
+		logger.Error("repo remove failed", zap.String("repo", name), zap.Error(err))
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]string{"error": "repository not found"})
 		return
@@ -871,7 +871,7 @@ func handleDeleteRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 // initThreatIntelProviders initializes enabled threat intel providers.
-func initThreatIntelProviders(cfg *config.Config, logger *log.Logger) []enrichment.Provider {
+func initThreatIntelProviders(cfg *config.Config, logger *zap.Logger) []enrichment.Provider {
 	var providers []enrichment.Provider
 
 	// Initialize OTX if enabled
@@ -885,10 +885,10 @@ func initThreatIntelProviders(cfg *config.Config, logger *log.Logger) []enrichme
 		}
 		otx, err := enrichment.NewOTXProvider(otxCfg)
 		if err != nil {
-			logger.Printf("Warning: OTX provider init failed: %v", err)
+			logger.Warn("OTX provider init failed", zap.Error(err))
 		} else {
 			providers = append(providers, otx)
-			logger.Printf("OTX provider initialized")
+			logger.Info("OTX provider initialized")
 		}
 	}
 
@@ -906,10 +906,10 @@ func initThreatIntelProviders(cfg *config.Config, logger *log.Logger) []enrichme
 		}
 		misp, err := enrichment.NewMISPProvider(mispCfg)
 		if err != nil {
-			logger.Printf("Warning: MISP provider init failed: %v", err)
+			logger.Warn("MISP provider init failed", zap.Error(err))
 		} else {
 			providers = append(providers, misp)
-			logger.Printf("MISP provider initialized")
+			logger.Info("MISP provider initialized")
 		}
 	}
 
@@ -920,14 +920,14 @@ func initThreatIntelProviders(cfg *config.Config, logger *log.Logger) []enrichme
 			cfg.ThreatIntel.VirusTotal.RateLimit,
 		)
 		if err != nil {
-			logger.Printf("Warning: VirusTotal provider init failed: %v", err)
+			logger.Warn("VirusTotal provider init failed", zap.Error(err))
 		} else {
 			providers = append(providers, vt)
-			logger.Printf("VirusTotal provider initialized")
+			logger.Info("VirusTotal provider initialized")
 		}
 	}
 
-	logger.Printf("Threat intel providers initialized: %d", len(providers))
+	logger.Info("Threat intel providers initialized", zap.Int("count", len(providers)))
 	return providers
 }
 

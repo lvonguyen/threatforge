@@ -37,9 +37,7 @@ type RateLimitConfig struct {
 
 // TierLimits defines rate limits per API tier
 type TierLimits struct {
-	RequestsPerSecond int `yaml:"requests_per_second"`
 	RequestsPerMinute int `yaml:"requests_per_minute"`
-	RequestsPerHour   int `yaml:"requests_per_hour"`
 	BurstSize         int `yaml:"burst_size"`
 }
 
@@ -47,7 +45,6 @@ type TierLimits struct {
 type EndpointLimits struct {
 	Path              string `yaml:"path"`
 	Method            string `yaml:"method"`
-	RequestsPerSecond int    `yaml:"requests_per_second"`
 	RequestsPerMinute int    `yaml:"requests_per_minute"`
 	CostMultiplier    int    `yaml:"cost_multiplier"`
 }
@@ -90,27 +87,19 @@ func NewRateLimiter(redisClient *redis.Client, cfg RateLimitConfig, logger *zap.
 func DefaultTiers() map[string]TierLimits {
 	return map[string]TierLimits{
 		"free": {
-			RequestsPerSecond: 2,
 			RequestsPerMinute: 30,
-			RequestsPerHour:   200,
 			BurstSize:         5,
 		},
 		"basic": {
-			RequestsPerSecond: 10,
 			RequestsPerMinute: 100,
-			RequestsPerHour:   1000,
 			BurstSize:         20,
 		},
 		"professional": {
-			RequestsPerSecond: 30,
 			RequestsPerMinute: 300,
-			RequestsPerHour:   3000,
 			BurstSize:         60,
 		},
 		"enterprise": {
-			RequestsPerSecond: 100,
 			RequestsPerMinute: 1000,
-			RequestsPerHour:   10000,
 			BurstSize:         200,
 		},
 	}
@@ -123,7 +112,6 @@ func DefaultEndpointLimits() map[string]EndpointLimits {
 		"POST:/api/v1/iocs/enrich": {
 			Path:              "/api/v1/iocs/enrich",
 			Method:            "POST",
-			RequestsPerSecond: 5,
 			RequestsPerMinute: 50,
 			CostMultiplier:    2,
 		},
@@ -131,7 +119,6 @@ func DefaultEndpointLimits() map[string]EndpointLimits {
 		"POST:/api/v1/iocs/bulk": {
 			Path:              "/api/v1/iocs/bulk",
 			Method:            "POST",
-			RequestsPerSecond: 2,
 			RequestsPerMinute: 20,
 			CostMultiplier:    5,
 		},
@@ -139,7 +126,6 @@ func DefaultEndpointLimits() map[string]EndpointLimits {
 		"POST:/api/v1/mitre/map": {
 			Path:              "/api/v1/mitre/map",
 			Method:            "POST",
-			RequestsPerSecond: 10,
 			RequestsPerMinute: 100,
 			CostMultiplier:    1,
 		},
@@ -147,7 +133,6 @@ func DefaultEndpointLimits() map[string]EndpointLimits {
 		"POST:/api/v1/feeds/sync": {
 			Path:              "/api/v1/feeds/sync",
 			Method:            "POST",
-			RequestsPerSecond: 1,
 			RequestsPerMinute: 5,
 			CostMultiplier:    10,
 		},
@@ -234,9 +219,7 @@ func (rl *RateLimiter) getTierLimits(tier string) TierLimits {
 		return limits
 	}
 	return TierLimits{
-		RequestsPerSecond: rl.config.DefaultRequestsPerSecond,
 		RequestsPerMinute: rl.config.DefaultRequestsPerMinute,
-		RequestsPerHour:   rl.config.DefaultRequestsPerMinute * 10,
 		BurstSize:         rl.config.DefaultBurstSize,
 	}
 }
@@ -254,14 +237,10 @@ func (rl *RateLimiter) calculateEffectiveLimits(tier TierLimits, endpoint *Endpo
 		return tier
 	}
 	effective := tier
-	if endpoint.RequestsPerSecond > 0 && endpoint.RequestsPerSecond < tier.RequestsPerSecond {
-		effective.RequestsPerSecond = endpoint.RequestsPerSecond
-	}
 	if endpoint.RequestsPerMinute > 0 && endpoint.RequestsPerMinute < tier.RequestsPerMinute {
 		effective.RequestsPerMinute = endpoint.RequestsPerMinute
 	}
 	if endpoint.CostMultiplier > 1 {
-		effective.RequestsPerSecond = max(1, effective.RequestsPerSecond/endpoint.CostMultiplier)
 		effective.RequestsPerMinute = max(1, effective.RequestsPerMinute/endpoint.CostMultiplier)
 	}
 	return effective

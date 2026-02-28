@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -379,7 +380,68 @@ func (m *Manager) validateRepository(repo *Repository) error {
 		return fmt.Errorf("%w: URL must be HTTPS or SSH format", ErrInvalidURL)
 	}
 
+	// SSRF protection: for HTTPS URLs, resolve the hostname and reject internal addresses.
+	if strings.HasPrefix(repo.RemoteURL, "https://") {
+		// Extract host from the URL (strip scheme and path)
+		withoutScheme := strings.TrimPrefix(repo.RemoteURL, "https://")
+		host := withoutScheme
+		if idx := strings.IndexAny(withoutScheme, "/?#"); idx >= 0 {
+			host = withoutScheme[:idx]
+		}
+		// Strip port if present
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if isInternalHost(host) {
+			return fmt.Errorf("%w: HTTPS URL resolves to an internal address", ErrInvalidURL)
+		}
+	}
+
 	return nil
+}
+
+// isInternalHost resolves a hostname and returns true if any resolved address
+// falls within RFC 1918 private ranges, loopback, link-local (IMDS), or
+// IPv6 loopback/link-local ranges.
+func isInternalHost(host string) bool {
+	// Private and reserved CIDR ranges to block
+	internalCIDRs := []string{
+		"10.0.0.0/8",     // RFC 1918
+		"172.16.0.0/12",  // RFC 1918
+		"192.168.0.0/16", // RFC 1918
+		"169.254.0.0/16", // link-local / AWS IMDS
+		"127.0.0.0/8",    // loopback
+		"::1/128",        // IPv6 loopback
+		"fe80::/10",      // IPv6 link-local
+		"fc00::/7",       // IPv6 unique-local
+	}
+
+	var internalNets []*net.IPNet
+	for _, cidr := range internalCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err == nil {
+			internalNets = append(internalNets, ipNet)
+		}
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		// Fail closed: if we cannot resolve, reject to be safe
+		return true
+	}
+
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+		for _, ipNet := range internalNets {
+			if ipNet.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getHeadCommit returns the current HEAD commit hash.

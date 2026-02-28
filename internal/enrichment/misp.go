@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // MISPProvider implements the Provider interface for MISP.
@@ -24,6 +26,7 @@ type MISPProvider struct {
 	httpClient *http.Client
 	rateLimit  RateLimitStatus
 	mu         sync.RWMutex
+	logger     *zap.Logger
 }
 
 // MISPConfig holds MISP-specific configuration.
@@ -47,7 +50,7 @@ func DefaultMISPConfig() MISPConfig {
 }
 
 // NewMISPProvider creates a new MISP provider.
-func NewMISPProvider(config MISPConfig) (*MISPProvider, error) {
+func NewMISPProvider(config MISPConfig, logger *zap.Logger) (*MISPProvider, error) {
 	// Load API key from environment
 	apiKey := os.Getenv(config.APIKey)
 	if apiKey == "" {
@@ -66,6 +69,7 @@ func NewMISPProvider(config MISPConfig) (*MISPProvider, error) {
 	// Apply VerifySSL setting to the HTTP transport.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if !config.VerifySSL {
+		logger.Warn("MISP TLS verification disabled — vulnerable to MitM", zap.String("base_url", config.BaseURL))
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // controlled by explicit operator config
 	}
 
@@ -81,6 +85,7 @@ func NewMISPProvider(config MISPConfig) (*MISPProvider, error) {
 			Limit:     config.RateLimit,
 			ResetAt:   time.Now().Add(time.Minute),
 		},
+		logger: logger,
 	}, nil
 }
 

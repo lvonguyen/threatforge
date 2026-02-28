@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -652,8 +653,6 @@ func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 		events = append(events, evt)
 	}
 
-	pipelineStats.EventsReceived.Add(int64(len(events)))
-
 	// Queue for processing
 	if redisClient != nil {
 		pipe := redisClient.Pipeline()
@@ -667,10 +666,14 @@ func handleHECEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := pipe.Exec(r.Context()); err != nil {
 			logger.Error("redis HEC pipeline failed", zap.Error(err))
+			pipelineStats.EventsFailed.Add(int64(len(events)))
 			http.Error(w, `{"error":"internal queue failure"}`, http.StatusInternalServerError)
 			return
 		}
 	}
+
+	// Count only after successful enqueue
+	pipelineStats.EventsReceived.Add(int64(len(events)))
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{"text": "Success", "code": 0})
@@ -883,7 +886,7 @@ func initThreatIntelProviders(cfg *config.Config, logger *zap.Logger) []enrichme
 				CacheTTL: cfg.Redis.CacheTTL,
 			},
 		}
-		otx, err := enrichment.NewOTXProvider(otxCfg)
+		otx, err := enrichment.NewOTXProvider(otxCfg, logger)
 		if err != nil {
 			logger.Warn("OTX provider init failed", zap.Error(err))
 		} else {
@@ -904,7 +907,7 @@ func initThreatIntelProviders(cfg *config.Config, logger *zap.Logger) []enrichme
 			VerifySSL:     cfg.ThreatIntel.MISP.VerifySSL,
 			PublishedOnly: cfg.ThreatIntel.MISP.PublishedOnly,
 		}
-		misp, err := enrichment.NewMISPProvider(mispCfg)
+		misp, err := enrichment.NewMISPProvider(mispCfg, logger)
 		if err != nil {
 			logger.Warn("MISP provider init failed", zap.Error(err))
 		} else {
@@ -980,31 +983,38 @@ func extractIOCs(alert enrichment.Alert) []IOC {
 }
 
 // calculateRiskScore computes a risk score (0-100) based on threat matches.
+// Uses the highest-severity match as the base, then adds a corroboration bonus
+// (log2 of match count * 10) to reward multiple independent sources.
 func calculateRiskScore(matches []enrichment.Match) int {
 	if len(matches) == 0 {
 		return 0
 	}
 
-	var totalScore float64
-	for _, m := range matches {
-		// Base score from severity
-		switch m.Indicator.Severity {
-		case "critical":
-			totalScore += 40
-		case "high":
-			totalScore += 30
-		case "medium":
-			totalScore += 20
-		case "low":
-			totalScore += 10
-		default:
-			totalScore += 5
-		}
-		// Boost for high confidence
-		totalScore += m.Indicator.Confidence * 10
+	// Severity weights
+	severityWeight := map[string]float64{
+		"critical": 80,
+		"high":     60,
+		"medium":   40,
+		"low":      20,
 	}
 
-	score := int(totalScore / float64(len(matches)))
+	// Find the maximum weighted score across all matches (weight * confidence)
+	var maxScore float64
+	for _, m := range matches {
+		w, ok := severityWeight[m.Indicator.Severity]
+		if !ok {
+			w = 10
+		}
+		s := w * m.Indicator.Confidence
+		if s > maxScore {
+			maxScore = s
+		}
+	}
+
+	// Add corroboration bonus: each doubling of match count adds 10 points
+	corroboration := math.Log2(float64(len(matches))) * 10
+
+	score := int(maxScore + corroboration)
 	if score > 100 {
 		score = 100
 	}

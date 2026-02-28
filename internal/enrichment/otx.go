@@ -6,9 +6,9 @@ package enrichment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -35,6 +36,7 @@ type OTXProvider struct {
 	mu          sync.RWMutex
 	stopCleanup chan struct{}
 	stopOnce    sync.Once
+	logger      *zap.Logger
 }
 
 // OTXConfig holds OTX-specific configuration.
@@ -129,7 +131,7 @@ func (c *otxCache) cleanup() {
 
 // NewOTXProvider creates a new OTX provider. The caller should call Stop()
 // when the provider is no longer needed to release the cleanup goroutine.
-func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
+func NewOTXProvider(config OTXConfig, logger *zap.Logger) (*OTXProvider, error) {
 	apiKey := os.Getenv(config.APIKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("OTX API key not found in env var: %s", config.APIKey)
@@ -158,6 +160,7 @@ func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 			ResetAt:   time.Now().Add(time.Minute),
 		},
 		stopCleanup: make(chan struct{}),
+		logger:      logger,
 	}
 
 	// Start background cache cleanup
@@ -256,7 +259,7 @@ func (p *OTXProvider) GetIndicators(ctx context.Context, iocType IOCType, since 
 
 	// Warn if additional pages exist that were not fetched.
 	if pulseResp.Next != "" {
-		log.Printf("[otx] GetIndicators: results truncated at limit=%d; more pages available (next=%q). Increase PulseLimit to fetch all.", p.config.PulseLimit, pulseResp.Next)
+		p.logger.Warn("GetIndicators results truncated", zap.Int("limit", p.config.PulseLimit))
 	}
 
 	// Extract indicators matching the requested type
@@ -373,23 +376,29 @@ func (p *OTXProvider) CheckBatch(ctx context.Context, iocType IOCType, values []
 	// OTX doesn't have a native batch API, so we check individually
 	// but leverage caching to avoid redundant lookups
 	var matches []Match
+	var errs []error
 
-	for _, value := range values {
+	for _, v := range values {
 		select {
 		case <-ctx.Done():
 			return matches, ctx.Err()
 		default:
 		}
 
-		match, err := p.CheckIOC(ctx, iocType, value)
+		match, err := p.CheckIOC(ctx, iocType, v)
 		if err != nil {
-			// Log but continue with other values
+			p.logger.Warn("CheckIOC failed", zap.String("value", v), zap.Error(err))
+			errs = append(errs, err)
 			continue
 		}
 
 		if match != nil {
 			matches = append(matches, *match)
 		}
+	}
+
+	if len(matches) == 0 && len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 
 	return matches, nil

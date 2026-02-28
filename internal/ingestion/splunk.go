@@ -32,17 +32,18 @@ type HECReceiver struct {
 
 // ReceiverConfig holds HEC receiver configuration.
 type ReceiverConfig struct {
-	Port         int           `yaml:"port"`
-	TokenEnv     string        `yaml:"token_env"`
-	TLSCertFile  string        `yaml:"tls_cert_file"`
-	TLSKeyFile   string        `yaml:"tls_key_file"`
-	MaxBatchSize int           `yaml:"max_batch_size"`
-	MaxEventSize int           `yaml:"max_event_size"`
-	AckEnabled   bool          `yaml:"ack_enabled"`
-	ReadTimeout  time.Duration `yaml:"read_timeout"`
-	WriteTimeout time.Duration `yaml:"write_timeout"`
-	RateLimit    float64       `yaml:"rate_limit"` // Requests per second (0 = disabled)
-	RateBurst    int           `yaml:"rate_burst"` // Max burst size
+	Port              int           `yaml:"port"`
+	TokenEnv          string        `yaml:"token_env"`
+	TLSCertFile       string        `yaml:"tls_cert_file"`
+	TLSKeyFile        string        `yaml:"tls_key_file"`
+	MaxBatchSize      int           `yaml:"max_batch_size"`
+	MaxEventSize      int           `yaml:"max_event_size"`
+	AckEnabled        bool          `yaml:"ack_enabled"`
+	ReadTimeout       time.Duration `yaml:"read_timeout"`
+	ReadHeaderTimeout time.Duration `yaml:"read_header_timeout"`
+	WriteTimeout      time.Duration `yaml:"write_timeout"`
+	RateLimit         float64       `yaml:"rate_limit"` // Requests per second (0 = disabled)
+	RateBurst         int           `yaml:"rate_burst"` // Max burst size
 }
 
 // DefaultReceiverConfig returns sensible defaults.
@@ -109,11 +110,16 @@ func (r *HECReceiver) Start(ctx context.Context) error {
 	mux.HandleFunc("/services/collector/health", r.handleHealth)
 	mux.HandleFunc("/services/collector/health/1.0", r.handleHealth)
 
+	readHeaderTimeout := r.config.ReadHeaderTimeout
+	if readHeaderTimeout == 0 {
+		readHeaderTimeout = 10 * time.Second
+	}
 	r.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", r.config.Port),
-		Handler:      mux,
-		ReadTimeout:  r.config.ReadTimeout,
-		WriteTimeout: r.config.WriteTimeout,
+		Addr:              fmt.Sprintf(":%d", r.config.Port),
+		Handler:           mux,
+		ReadTimeout:       r.config.ReadTimeout,
+		ReadHeaderTimeout: readHeaderTimeout,
+		WriteTimeout:      r.config.WriteTimeout,
 	}
 
 	// Capture server in local var to avoid race condition if context

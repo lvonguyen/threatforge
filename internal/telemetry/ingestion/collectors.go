@@ -4,8 +4,13 @@ package ingestion
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
+
+// ErrNotImplemented is returned by collector stubs that are not yet implemented.
+var ErrNotImplemented = errors.New("collector not implemented")
 
 // Collector defines the interface for telemetry collectors
 type Collector interface {
@@ -52,16 +57,12 @@ func NewCrowdStrikeCollector(cfg CollectorConfig) *CrowdStrikeCollector {
 func (c *CrowdStrikeCollector) Name() string { return "crowdstrike" }
 func (c *CrowdStrikeCollector) Type() string { return "edr" }
 
-func (c *CrowdStrikeCollector) Collect(ctx context.Context, since time.Time) ([]*RawEvent, error) {
-	// TODO: Implement CrowdStrike Falcon API integration
-	// - Authenticate with OAuth2
-	// - Query detections endpoint
-	// - Transform to RawEvent format
-	return nil, nil
+func (c *CrowdStrikeCollector) Collect(_ context.Context, _ time.Time) ([]*RawEvent, error) {
+	return nil, fmt.Errorf("CrowdStrike collector: %w", ErrNotImplemented)
 }
 
-func (c *CrowdStrikeCollector) HealthCheck(ctx context.Context) error {
-	return nil
+func (c *CrowdStrikeCollector) HealthCheck(_ context.Context) error {
+	return fmt.Errorf("CrowdStrike collector: %w", ErrNotImplemented)
 }
 
 // SentinelOneCollector collects events from SentinelOne
@@ -77,13 +78,12 @@ func NewSentinelOneCollector(cfg CollectorConfig) *SentinelOneCollector {
 func (c *SentinelOneCollector) Name() string { return "sentinelone" }
 func (c *SentinelOneCollector) Type() string { return "edr" }
 
-func (c *SentinelOneCollector) Collect(ctx context.Context, since time.Time) ([]*RawEvent, error) {
-	// TODO: Implement SentinelOne API integration
-	return nil, nil
+func (c *SentinelOneCollector) Collect(_ context.Context, _ time.Time) ([]*RawEvent, error) {
+	return nil, fmt.Errorf("SentinelOne collector: %w", ErrNotImplemented)
 }
 
-func (c *SentinelOneCollector) HealthCheck(ctx context.Context) error {
-	return nil
+func (c *SentinelOneCollector) HealthCheck(_ context.Context) error {
+	return fmt.Errorf("SentinelOne collector: %w", ErrNotImplemented)
 }
 
 // DefenderCollector collects events from Microsoft Defender
@@ -99,11 +99,10 @@ func NewDefenderCollector(cfg CollectorConfig) *DefenderCollector {
 func (c *DefenderCollector) Name() string { return "defender" }
 func (c *DefenderCollector) Type() string { return "edr" }
 
-func (c *DefenderCollector) Collect(ctx context.Context, since time.Time) ([]*RawEvent, error) {
-	// TODO: Implement Microsoft Graph Security API integration
-	return nil, nil
+func (c *DefenderCollector) Collect(_ context.Context, _ time.Time) ([]*RawEvent, error) {
+	return nil, fmt.Errorf("Defender collector: %w", ErrNotImplemented)
 }
 
-func (c *DefenderCollector) HealthCheck(ctx context.Context) error {
-	return nil
+func (c *DefenderCollector) HealthCheck(_ context.Context) error {
+	return fmt.Errorf("Defender collector: %w", ErrNotImplemented)
 }

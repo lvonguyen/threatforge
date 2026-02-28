@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // =============================================================================
@@ -29,7 +31,7 @@ func TestNewOTXProvider_MissingAPIKey(t *testing.T) {
 		},
 	}
 
-	_, err := NewOTXProvider(config)
+	_, err := NewOTXProvider(config, zap.NewNop())
 	if err == nil {
 		t.Error("NewOTXProvider should fail when API key env var is empty")
 	}
@@ -47,7 +49,7 @@ func TestNewOTXProvider_Success(t *testing.T) {
 	config := DefaultOTXConfig()
 	config.APIKey = "TEST_OTX_KEY"
 
-	provider, err := NewOTXProvider(config)
+	provider, err := NewOTXProvider(config, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewOTXProvider should succeed: %v", err)
 	}
@@ -74,7 +76,7 @@ func TestNewOTXProvider_DefaultBaseURL(t *testing.T) {
 		},
 	}
 
-	provider, err := NewOTXProvider(config)
+	provider, err := NewOTXProvider(config, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewOTXProvider should succeed: %v", err)
 	}
@@ -111,7 +113,7 @@ func TestHealthCheck_Success(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	err := provider.HealthCheck(context.Background())
 	if err != nil {
@@ -134,7 +136,7 @@ func TestHealthCheck_Unauthorized(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	err := provider.HealthCheck(context.Background())
 	if err == nil {
@@ -160,7 +162,7 @@ func TestHealthCheck_ServerError(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	err := provider.HealthCheck(context.Background())
 	if err == nil {
@@ -215,7 +217,7 @@ func TestCheckIOC_IPFound(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	match, err := provider.CheckIOC(context.Background(), IOCTypeIP, "8.8.8.8")
 	if err != nil {
@@ -253,7 +255,7 @@ func TestCheckIOC_NotFound(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	match, err := provider.CheckIOC(context.Background(), IOCTypeIP, "192.168.1.1")
 	if err != nil {
@@ -289,7 +291,7 @@ func TestCheckIOC_NoPulses(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	match, err := provider.CheckIOC(context.Background(), IOCTypeIP, "1.1.1.1")
 	if err != nil {
@@ -337,7 +339,7 @@ func TestCheckIOC_Domain(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	match, err := provider.CheckIOC(context.Background(), IOCTypeDomain, "malicious.com")
 	if err != nil {
@@ -391,7 +393,7 @@ func TestCheckIOC_Hash(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	match, err := provider.CheckIOC(context.Background(), IOCTypeHash, testHash)
 	if err != nil {
@@ -419,7 +421,7 @@ func TestCheckIOC_UnsupportedType(t *testing.T) {
 	config := DefaultOTXConfig()
 	config.APIKey = "TEST_OTX_KEY"
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	match, err := provider.CheckIOC(context.Background(), IOCTypeFile, "/some/file/path")
 	if err != nil {
@@ -466,7 +468,7 @@ func TestCache_HitAvoidsDuplicateRequest(t *testing.T) {
 	config.BaseURL = server.URL
 	config.CacheTTL = 1 * time.Hour
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	// First call - should hit API
 	_, err := provider.CheckIOC(context.Background(), IOCTypeIP, "8.8.8.8")
@@ -509,7 +511,7 @@ func TestCache_NegativeResultsCached(t *testing.T) {
 	config.BaseURL = server.URL
 	config.CacheTTL = 1 * time.Hour
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	// First call - should hit API, get 404
 	match1, err := provider.CheckIOC(context.Background(), IOCTypeIP, "192.168.1.1")
@@ -565,7 +567,7 @@ func TestCache_Expiration(t *testing.T) {
 	config.BaseURL = server.URL
 	config.CacheTTL = 50 * time.Millisecond // Short TTL for testing
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	// First call
 	_, _ = provider.CheckIOC(context.Background(), IOCTypeIP, "8.8.8.8")
@@ -613,7 +615,7 @@ func TestCache_ConcurrentAccess(t *testing.T) {
 	config.BaseURL = server.URL
 	config.CacheTTL = 1 * time.Hour
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	// Prime the cache with a single request
 	_, _ = provider.CheckIOC(context.Background(), IOCTypeIP, "8.8.8.8")
@@ -687,7 +689,7 @@ func TestCheckBatch_MultipleIOCs(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	values := []string{"8.8.8.8", "192.168.1.1", "1.1.1.1", "10.0.0.1"}
 	matches, err := provider.CheckBatch(context.Background(), IOCTypeIP, values)
@@ -729,7 +731,7 @@ func TestCheckBatch_ContextCancellation(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -775,7 +777,7 @@ func TestCheckBatch_CacheUtilization(t *testing.T) {
 	config.BaseURL = server.URL
 	config.CacheTTL = 1 * time.Hour
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	// First batch with some duplicate IPs
 	values1 := []string{"8.8.8.8", "8.8.8.8", "8.8.8.8"}
@@ -841,7 +843,7 @@ func TestGetIndicators_Success(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	since := time.Now().Add(-24 * time.Hour)
 	indicators, err := provider.GetIndicators(context.Background(), IOCTypeIP, since)
@@ -893,7 +895,7 @@ func TestGetIndicators_FiltersByType(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 	since := time.Now().Add(-24 * time.Hour)
 
 	// Test domain filter
@@ -936,7 +938,7 @@ func TestRateLimit_UpdateFromHeaders(t *testing.T) {
 	config.APIKey = "TEST_OTX_KEY"
 	config.BaseURL = server.URL
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	_ = provider.HealthCheck(context.Background())
 
@@ -961,7 +963,7 @@ func TestDetermineThreatType(t *testing.T) {
 	config := DefaultOTXConfig()
 	config.APIKey = "TEST_OTX_KEY"
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	tests := []struct {
 		tags     []string
@@ -998,7 +1000,7 @@ func TestDetermineSeverity(t *testing.T) {
 	config := DefaultOTXConfig()
 	config.APIKey = "TEST_OTX_KEY"
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	tests := []struct {
 		pulse    OTXPulse
@@ -1030,7 +1032,7 @@ func TestCalculateConfidence(t *testing.T) {
 	config := DefaultOTXConfig()
 	config.APIKey = "TEST_OTX_KEY"
 
-	provider, _ := NewOTXProvider(config)
+	provider, _ := NewOTXProvider(config, zap.NewNop())
 
 	tests := []struct {
 		pulseCount int

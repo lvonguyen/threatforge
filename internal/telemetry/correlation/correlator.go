@@ -103,6 +103,21 @@ func (c *Correlator) buildChain(entity string, events []*normalization.Normalize
 		return events[i].Timestamp.Before(events[j].Timestamp)
 	})
 
+	// Filter to configured time window relative to the latest event
+	if c.config.TimeWindowMinutes > 0 {
+		cutoff := events[len(events)-1].Timestamp.Add(-time.Duration(c.config.TimeWindowMinutes) * time.Minute)
+		var windowed []*normalization.NormalizedEvent
+		for _, e := range events {
+			if !e.Timestamp.Before(cutoff) {
+				windowed = append(windowed, e)
+			}
+		}
+		events = windowed
+		if len(events) < c.config.MinEventsForChain {
+			return nil
+		}
+	}
+
 	chain := &EventChain{
 		ID:        fmt.Sprintf("%s-chain-%d", entity, events[0].Timestamp.UnixNano()),
 		Events:    events,

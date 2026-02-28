@@ -138,6 +138,12 @@ func NewOTXProvider(config OTXConfig) (*OTXProvider, error) {
 		config.BaseURL = otxDefaultBaseURL
 	}
 
+	// Validate the base URL at construction time to reject SSRF-prone configs
+	// (e.g. pointing the provider at an internal metadata service).
+	if err := validateExternalURL(config.BaseURL); err != nil {
+		return nil, fmt.Errorf("OTX base URL rejected: %w", err)
+	}
+
 	provider := &OTXProvider{
 		config: config,
 		apiKey: apiKey,
@@ -346,6 +352,10 @@ func (p *OTXProvider) CheckIOC(ctx context.Context, iocType IOCType, value strin
 		return nil, err
 	}
 
+	if v == nil {
+		return nil, nil
+	}
+
 	return v.(*sfResult).match, nil
 }
 
@@ -474,10 +484,24 @@ func otxTypeToIOCType(otxType string) IOCType {
 	}
 }
 
+// otxParseTimestamp parses an OTX timestamp string as UTC, trying both known
+// formats (with and without microseconds). Returns zero time on parse failure.
+func otxParseTimestamp(s string) time.Time {
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.000000",
+		"2006-01-02T15:04:05",
+	} {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 // otxIndicatorToIndicator converts OTX indicator to our format.
 func (p *OTXProvider) otxIndicatorToIndicator(ind OTXIndicator, pulse OTXPulse) Indicator {
-	created, _ := time.Parse("2006-01-02T15:04:05", ind.Created)
-	modified, _ := time.Parse("2006-01-02T15:04:05.000000", pulse.Modified)
+	created := otxParseTimestamp(ind.Created)
+	modified := otxParseTimestamp(pulse.Modified)
 
 	if modified.IsZero() {
 		modified = created
@@ -508,8 +532,8 @@ func (p *OTXProvider) buildMatchFromGeneral(iocType IOCType, value string, resp 
 
 	// Use first pulse for primary match info
 	pulse := resp.PulseInfo.Pulses[0]
-	created, _ := time.Parse("2006-01-02T15:04:05.000000", pulse.Created)
-	modified, _ := time.Parse("2006-01-02T15:04:05.000000", pulse.Modified)
+	created := otxParseTimestamp(pulse.Created)
+	modified := otxParseTimestamp(pulse.Modified)
 
 	if modified.IsZero() {
 		modified = created

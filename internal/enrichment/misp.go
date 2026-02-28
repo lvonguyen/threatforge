@@ -58,6 +58,11 @@ func NewMISPProvider(config MISPConfig) (*MISPProvider, error) {
 		return nil, fmt.Errorf("MISP base URL is required")
 	}
 
+	// Validate the base URL at construction time to reject SSRF-prone configs.
+	if err := validateExternalURL(config.BaseURL); err != nil {
+		return nil, fmt.Errorf("MISP base URL rejected: %w", err)
+	}
+
 	// Apply VerifySSL setting to the HTTP transport.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if !config.VerifySSL {
@@ -296,9 +301,9 @@ func (p *MISPProvider) CheckBatch(ctx context.Context, iocType IOCType, values [
 
 // newRequest creates an authenticated MISP API request.
 func (p *MISPProvider) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	url := strings.TrimSuffix(p.config.BaseURL, "/") + path
+	fullURL := strings.TrimSuffix(p.config.BaseURL, "/") + path
 
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 	if err != nil {
 		return nil, err
 	}

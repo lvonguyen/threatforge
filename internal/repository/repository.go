@@ -168,9 +168,11 @@ func (m *Manager) Clone(ctx context.Context, repo *Repository) (*CloneResult, er
 	// Get commit hash
 	commitHash, _ := m.getHeadCommit(ctx, localPath)
 
-	// Store repository reference
+	// Store a copy of the repository config so that subsequent mutations by the
+	// caller do not silently alter the manager's internal state.
 	repo.LocalPath = localPath
-	m.repositories[repo.Name] = repo
+	stored := *repo
+	m.repositories[repo.Name] = &stored
 
 	return &CloneResult{
 		Repository: repo,

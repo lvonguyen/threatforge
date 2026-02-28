@@ -424,7 +424,15 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 				err = e
 			}
 		}
-		t.logger.Sync()
+		// Sync flushes any buffered log entries. Errors for ENOTTY/EINVAL are
+		// expected when stderr/stdout are not a real tty (e.g. in containers)
+		// and are intentionally ignored; all other errors are propagated.
+		if syncErr := t.logger.Sync(); syncErr != nil {
+			msg := syncErr.Error()
+			if !strings.Contains(msg, "invalid argument") && !strings.Contains(msg, "inappropriate ioctl") {
+				err = syncErr
+			}
+		}
 	})
 	return err
 }

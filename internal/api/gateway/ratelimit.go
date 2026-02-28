@@ -27,6 +27,10 @@ type RateLimitConfig struct {
 	Tiers                    map[string]TierLimits     `yaml:"tiers"`
 	Endpoints                map[string]EndpointLimits `yaml:"endpoints"`
 	IncludeHeaders           bool                      `yaml:"include_headers"`
+	// FailOpen controls behaviour when Redis is unavailable.
+	// When true, requests are allowed through (fail-open).
+	// When false (default), requests are denied (fail-closed / secure default).
+	FailOpen bool `yaml:"fail_open"`
 }
 
 // TierLimits defines rate limits per API tier
@@ -172,8 +176,16 @@ func (rl *RateLimiter) Check(ctx context.Context, tier, clientID, endpoint, meth
 
 	result, err := script.Run(ctx, rl.redis, []string{redisKey}, 60000).Int()
 	if err != nil {
-		rl.logger.Warn("Rate limit check failed, allowing request", zap.Error(err))
-		return &RateLimitResult{Allowed: true, Tier: tier}, nil
+		if rl.config.FailOpen {
+			rl.logger.Warn("Rate limit check failed (fail-open): allowing request", zap.Error(err))
+			return &RateLimitResult{Allowed: true, Tier: tier, Reason: "rate-limit-unavailable"}, nil
+		}
+		rl.logger.Warn("Rate limit check failed (fail-closed): denying request", zap.Error(err))
+		return &RateLimitResult{
+			Allowed: false,
+			Tier:    tier,
+			Reason:  "rate-limit-unavailable",
+		}, nil
 	}
 
 	allowed := result <= effectiveLimits.RequestsPerMinute

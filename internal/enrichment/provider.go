@@ -3,8 +3,80 @@ package enrichment
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/url"
 	"time"
 )
+
+// validateExternalURL rejects base URLs that resolve to internal address ranges
+// to prevent Server-Side Request Forgery (SSRF) against internal infrastructure.
+//
+// Blocked ranges: link-local (169.254.x / fe80:: — AWS/GCP/Azure IMDS),
+// RFC-1918 private networks (10.x, 172.16-31.x, 192.168.x), shared address
+// space (100.64.x — RFC 6598), IPv6 unique-local (fc00::/7), and the
+// unspecified address (0.0.0.0, ::).
+//
+// Loopback (127.x, ::1) is intentionally NOT blocked so that local test
+// servers remain accessible during development and testing.
+func validateExternalURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL has no host: %s", rawURL)
+	}
+
+	// Resolve host to IPs (handles both DNS names and IP literals).
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// DNS failure: pass through and let the HTTP client handle it.
+		return nil
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isInternalIP(ip) {
+			return fmt.Errorf("SSRF protection: URL %q resolves to an internal address (%s)", rawURL, ipStr)
+		}
+	}
+
+	return nil
+}
+
+// isInternalIP returns true for link-local, RFC-1918, shared-address-space,
+// and unspecified addresses. Loopback is excluded to allow local/test servers.
+func isInternalIP(ip net.IP) bool {
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+
+	internalRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"100.64.0.0/10", // Shared address space (RFC 6598)
+		"fc00::/7",      // IPv6 unique local
+	}
+
+	for _, cidr := range internalRanges {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
 
 // IOCType represents the type of indicator of compromise.
 type IOCType string

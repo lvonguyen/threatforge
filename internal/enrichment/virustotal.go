@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,12 +42,13 @@ type vtData struct {
 }
 
 type vtAttributes struct {
-	LastAnalysisStats  vtAnalysisStats        `json:"last_analysis_stats"`
-	LastAnalysisDate   int64                  `json:"last_analysis_date"`
-	Reputation         int                    `json:"reputation"`
-	Tags               []string               `json:"tags"`
-	TotalVotes         map[string]int         `json:"total_votes"`
-	LastAnalysisResult map[string]vtScanEntry `json:"last_analysis_results"`
+	LastAnalysisStats   vtAnalysisStats        `json:"last_analysis_stats"`
+	LastAnalysisDate    int64                  `json:"last_analysis_date"`
+	FirstSubmissionDate int64                  `json:"first_submission_date"` // Unix timestamp; zero when absent
+	Reputation          int                    `json:"reputation"`
+	Tags                []string               `json:"tags"`
+	TotalVotes          map[string]int         `json:"total_votes"`
+	LastAnalysisResult  map[string]vtScanEntry `json:"last_analysis_results"`
 }
 
 type vtAnalysisStats struct {
@@ -137,6 +139,7 @@ func (p *VirusTotalProvider) CheckIOC(ctx context.Context, iocType IOCType, valu
 
 func (p *VirusTotalProvider) CheckBatch(ctx context.Context, iocType IOCType, values []string) ([]Match, error) {
 	var matches []Match
+	var errs []error
 	for _, v := range values {
 		select {
 		case <-ctx.Done():
@@ -145,11 +148,16 @@ func (p *VirusTotalProvider) CheckBatch(ctx context.Context, iocType IOCType, va
 		}
 		m, err := p.CheckIOC(ctx, iocType, v)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("VT lookup for %q: %w", v, err))
 			continue
 		}
 		if m != nil {
 			matches = append(matches, *m)
 		}
+	}
+	// If every lookup failed and nothing succeeded, surface a joined error.
+	if len(matches) == 0 && len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return matches, nil
 }
@@ -243,6 +251,11 @@ func vtBuildMatch(iocType IOCType, value string, attrs *vtAttributes) *Match {
 		confidence = 1.0
 	}
 
+	var firstSeen time.Time
+	if attrs.FirstSubmissionDate != 0 {
+		firstSeen = time.Unix(attrs.FirstSubmissionDate, 0)
+	}
+
 	return &Match{
 		Indicator: Indicator{
 			Type:       iocType,
@@ -251,6 +264,7 @@ func vtBuildMatch(iocType IOCType, value string, attrs *vtAttributes) *Match {
 			Confidence: confidence,
 			Severity:   vtSeverity(malRatio),
 			Source:     "virustotal",
+			FirstSeen:  firstSeen,
 			LastSeen:   time.Unix(attrs.LastAnalysisDate, 0),
 			Tags:       attrs.Tags,
 		},

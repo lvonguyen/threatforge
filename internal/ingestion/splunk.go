@@ -178,7 +178,9 @@ func (r *HECReceiver) handleEvent(w http.ResponseWriter, req *http.Request) {
 	// Parse events (may be multiple JSON objects or newline-delimited)
 	events, err := r.parseEvents(body)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"text":"%s","code":6}`, err.Error()), http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"text": err.Error(), "code": 6})
 		return
 	}
 

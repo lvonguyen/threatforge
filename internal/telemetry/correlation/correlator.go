@@ -4,6 +4,7 @@ package correlation
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -103,7 +104,7 @@ func (c *Correlator) buildChain(entity string, events []*normalization.Normalize
 	})
 
 	chain := &EventChain{
-		ID:        entity + "-chain",
+		ID:        fmt.Sprintf("%s-chain-%d", entity, events[0].Timestamp.UnixNano()),
 		Events:    events,
 		StartTime: events[0].Timestamp,
 		EndTime:   events[len(events)-1].Timestamp,

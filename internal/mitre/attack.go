@@ -5,10 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -19,7 +17,6 @@ type AttackFramework struct {
 	tactics    map[string]*Tactic
 	mu         sync.RWMutex
 	logger     *zap.Logger
-	httpClient *http.Client
 }
 
 // Technique represents a MITRE ATT&CK technique
@@ -67,7 +64,6 @@ func NewAttackFramework(logger *zap.Logger) *AttackFramework {
 		techniques: make(map[string]*Technique),
 		tactics:    make(map[string]*Tactic),
 		logger:     logger,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 
 	// Initialize with common techniques

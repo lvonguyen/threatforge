@@ -128,7 +128,7 @@ func main() {
 	// Falls back to no-op (allow all) when Redis is unavailable.
 	var rateLimitMiddleware func(http.Handler) http.Handler
 	if redisClient != nil {
-		zapLogger, _ := zap.NewProduction()
+		zapLogger := zap.Must(zap.NewProduction())
 		rl := gateway.NewRateLimiter(redisClient, gateway.RateLimitConfig{
 			DefaultRequestsPerSecond: 10,
 			DefaultRequestsPerMinute: 100,

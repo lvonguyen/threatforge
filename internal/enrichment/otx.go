@@ -358,7 +358,14 @@ func (p *OTXProvider) CheckIOC(ctx context.Context, iocType IOCType, value strin
 		return nil, nil
 	}
 
-	return v.(*sfResult).match, nil
+	shared := v.(*sfResult).match
+	if shared == nil {
+		return nil, nil
+	}
+	// Return a shallow copy so each caller gets an independent struct.
+	// Prevents a data race if any caller mutates the returned *Match.
+	copied := *shared
+	return &copied, nil
 }
 
 // CheckBatch checks multiple IOCs against OTX.

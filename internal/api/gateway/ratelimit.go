@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -303,5 +304,10 @@ func (rl *RateLimiter) Middleware(getTier func(r *http.Request) string, getClien
 func getClientIP(r *http.Request) string {
 	// Do not trust X-Forwarded-For/X-Real-IP without a configured trusted proxy list.
 	// Fall back to RemoteAddr which is set by the HTTP server from the TCP connection.
-	return r.RemoteAddr
+	// Strip the ephemeral port so each new TCP connection maps to the same rate-limit bucket.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }

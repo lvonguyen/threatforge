@@ -50,6 +50,27 @@ func validateExternalURL(rawURL string) error {
 	return nil
 }
 
+// internalNetworks holds the pre-parsed CIDR ranges checked by isInternalIP.
+// Parsed once at init to avoid repeated net.ParseCIDR calls on every invocation.
+var internalNetworks []*net.IPNet
+
+func init() {
+	cidrs := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"100.64.0.0/10", // Shared address space (RFC 6598)
+		"fc00::/7",      // IPv6 unique local
+	}
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		internalNetworks = append(internalNetworks, network)
+	}
+}
+
 // isInternalIP returns true for link-local, RFC-1918, shared-address-space,
 // and unspecified addresses. Loopback is excluded to allow local/test servers.
 func isInternalIP(ip net.IP) bool {
@@ -57,19 +78,7 @@ func isInternalIP(ip net.IP) bool {
 		return true
 	}
 
-	internalRanges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"100.64.0.0/10", // Shared address space (RFC 6598)
-		"fc00::/7",      // IPv6 unique local
-	}
-
-	for _, cidr := range internalRanges {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
+	for _, network := range internalNetworks {
 		if network.Contains(ip) {
 			return true
 		}

@@ -143,13 +143,10 @@ func (m *Manager) Clone(ctx context.Context, repo *Repository) (*CloneResult, er
 
 	// Configure SSH key if provided (validate path to prevent injection)
 	if repo.SSHKeyPath != "" {
+		if err := validateSSHKeyPath(repo.SSHKeyPath); err != nil {
+			return nil, err
+		}
 		cleanPath := filepath.Clean(repo.SSHKeyPath)
-		if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
-			return nil, fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
-		}
-		if !safeSSHKeyRe.MatchString(cleanPath) {
-			return nil, fmt.Errorf("invalid SSH key path: contains unsafe characters: %s", cleanPath)
-		}
 		cmd.Env = append(os.Environ(),
 			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=accept-new", cleanPath),
 		)
@@ -226,13 +223,10 @@ func (m *Manager) Pull(ctx context.Context, name string) (*CloneResult, error) {
 	cmd.Dir = repo.LocalPath
 
 	if repo.SSHKeyPath != "" {
+		if err := validateSSHKeyPath(repo.SSHKeyPath); err != nil {
+			return nil, err
+		}
 		cleanPath := filepath.Clean(repo.SSHKeyPath)
-		if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
-			return nil, fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
-		}
-		if !safeSSHKeyRe.MatchString(cleanPath) {
-			return nil, fmt.Errorf("invalid SSH key path: contains unsafe characters: %s", cleanPath)
-		}
 		cmd.Env = append(os.Environ(),
 			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=accept-new", cleanPath),
 		)
@@ -417,6 +411,20 @@ func (m *Manager) Register(repo *Repository) error {
 	// Store a copy so caller mutations don't silently alter internal state.
 	copied := *repo
 	m.repositories[repo.Name] = &copied
+	return nil
+}
+
+// validateSSHKeyPath validates an SSH key path and returns an error if it is unsafe.
+// It checks that the path is absolute, contains no ".." traversal, and consists
+// only of characters that are safe to embed in a shell command string.
+func validateSSHKeyPath(keyPath string) error {
+	cleanPath := filepath.Clean(keyPath)
+	if !filepath.IsAbs(cleanPath) || strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("invalid SSH key path: must be an absolute path without traversal")
+	}
+	if !safeSSHKeyRe.MatchString(cleanPath) {
+		return fmt.Errorf("invalid SSH key path: contains unsafe characters: %s", cleanPath)
+	}
 	return nil
 }
 

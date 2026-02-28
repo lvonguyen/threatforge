@@ -690,16 +690,18 @@ func handleHECRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pipelineStats.EventsReceived.Add(1)
-
 	// Queue raw event
 	if redisClient != nil {
 		if err := redisClient.LPush(r.Context(), "threatforge:hec:raw", body).Err(); err != nil {
 			logger.Error("redis HEC raw push failed", zap.Error(err))
 			pipelineStats.EventsFailed.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]any{"text": "Queue failure", "code": 8})
+			return
 		}
 	}
 
+	pipelineStats.EventsReceived.Add(1)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]any{"text": "Success", "code": 0})
 }

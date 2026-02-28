@@ -255,6 +255,10 @@ func vtBuildMatch(iocType IOCType, value string, attrs *vtAttributes) *Match {
 	if attrs.FirstSubmissionDate != 0 {
 		firstSeen = time.Unix(attrs.FirstSubmissionDate, 0)
 	}
+	var lastSeen time.Time
+	if attrs.LastAnalysisDate != 0 {
+		lastSeen = time.Unix(attrs.LastAnalysisDate, 0)
+	}
 
 	return &Match{
 		Indicator: Indicator{
@@ -265,7 +269,7 @@ func vtBuildMatch(iocType IOCType, value string, attrs *vtAttributes) *Match {
 			Severity:   vtSeverity(malRatio),
 			Source:     "virustotal",
 			FirstSeen:  firstSeen,
-			LastSeen:   time.Unix(attrs.LastAnalysisDate, 0),
+			LastSeen:   lastSeen,
 			Tags:       attrs.Tags,
 		},
 		MatchedOn:    string(iocType),

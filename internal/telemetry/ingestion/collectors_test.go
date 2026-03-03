@@ -20,8 +20,8 @@ type stubCollector struct {
 	healthErr  error
 }
 
-func (s *stubCollector) Name() string  { return s.name }
-func (s *stubCollector) Type() string  { return s.ctype }
+func (s *stubCollector) Name() string { return s.name }
+func (s *stubCollector) Type() string { return s.ctype }
 func (s *stubCollector) Collect(_ context.Context, _ time.Time) ([]*RawEvent, error) {
 	return s.events, s.collectErr
 }

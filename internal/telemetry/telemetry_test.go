@@ -28,7 +28,7 @@ func (s *stubCollector) Collect(ctx context.Context, since time.Time) ([]Event, 
 func (s *stubCollector) HealthCheck(_ context.Context) error { return s.healthErr }
 
 type stubNormalizer struct {
-	schema    string
+	schema      string
 	normalizeFn func(Event) (Event, error)
 }
 

@@ -92,24 +92,6 @@ func vtMaliciousResponse(malicious, total int, tags []string) vtResponse {
 	}
 }
 
-func newVTProvider(t *testing.T, serverURL string) *VirusTotalProvider {
-	t.Helper()
-	os.Setenv("TEST_VT_KEY", "test-api-key")
-	defer os.Unsetenv("TEST_VT_KEY")
-
-	p, err := NewVirusTotalProvider("TEST_VT_KEY", 30*time.Second, 60)
-	if err != nil {
-		t.Fatalf("creating provider: %v", err)
-	}
-	// Point to test server
-	p.httpClient = &http.Client{Timeout: 5 * time.Second}
-	// Override base URL via endpoint: we'll use a custom transport instead
-	// The httptest server replaces the base URL dynamically in handlers.
-	// We store the URL for endpoint building in tests.
-	_ = serverURL
-	return p
-}
-
 func TestVTCheckIOC_IP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/ip_addresses/") {
